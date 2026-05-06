@@ -1,0 +1,140 @@
+# =============================================================================
+# SEGREDOS E CONFIGURAÇÕES LOCAIS — NUNCA DEVEM ENTRAR NO REPOSITÓRIO
+# =============================================================================
+
+# Arquivos de variáveis de ambiente — o mais crítico
+*.env
+.env.*
+!.env.example        # exceção: o template sem valores reais PODE ser commitado
+
+# Secrets do Kubernetes gerados localmente
+k8s/secret.yaml
+k8s/secrets/
+secrets/
+**/secret.yaml
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+*senha*.txt
+*b64*.txt
+
+# Credenciais de cloud providers
+.aws/
+.gcp/
+gcloud/
+*credentials*.json
+*service-account*.json
+
+# Terraform — state contém valores sensíveis em texto plano
+*/terraform/.terraform/
+*/terraform/terraform.tfstate
+*/terraform/terraform.tfstate.backup
+*/terraform/.terraform.lock.hcl
+*/terraform/*.tfvars          # valores de variáveis (podem conter segredos)
+!terraform/*.tfvars.example # template sem valores reais pode ser commitado
+
+# =============================================================================
+# PYTHON
+# =============================================================================
+
+# Bytecode compilado — gerado automaticamente, não pertence ao repo
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyo
+.Python
+
+# Ambientes virtuais — cada dev tem o seu localmente
+.venv/
+venv/
+env/
+ENV/
+
+# Distribuição e build
+dist/
+build/
+*.egg-info/
+*.egg
+.eggs/
+
+# Pytest e coverage
+.pytest_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+junit*.xml
+
+# Mypy
+.mypy_cache/
+.dmypy.json
+
+# Ruff
+.ruff_cache/
+
+# =============================================================================
+# DOCKER
+# =============================================================================
+
+# Nunca commitar imagens exportadas
+*.tar
+
+# =============================================================================
+# SISTEMA OPERACIONAL
+# =============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# =============================================================================
+# IDEs E EDITORES
+# =============================================================================
+
+# VSCode — as configurações pessoais não pertencem ao repo
+# exceção: .vscode/extensions.json pode ser commitado (recomendações de extensões)
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json   # só se for config de projeto, não pessoal
+
+# JetBrains (PyCharm, IntelliJ)
+.idea/
+
+# Vim
+*.swp
+*.swo
+
+# =============================================================================
+# LOGS E DADOS TEMPORÁRIOS
+# =============================================================================
+
+*.log
+logs/
+tmp/
+temp/
+
+# =============================================================================
+# K6 / LOCUST — resultados de teste de carga
+# =============================================================================
+
+k6-results/
+locust-results/
+load-test-results/
+
+# =============================================================================
+# # Zips de entrega 
+# =============================================================================
+
+*.zip

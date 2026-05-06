@@ -1,0 +1,44 @@
+﻿# infra/observability/grafana-configmaps-monitoring.yaml
+# Aplicar ANTES do helm upgrade grafana:
+#   kubectl apply -f infra/observability/grafana-configmaps-monitoring.yaml
+# Reaplicar sempre que o dashboard ou datasource mudar.
+---
+# 1. Datasources - VictoriaMetrics + Loki + Tempo
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wizard-datasource-monitoring
+  namespace: monitoring
+  labels:
+    grafana_datasource: "1"
+data:
+  datasource.yaml: |-
+    apiVersion: 1
+    datasources:
+      - name: VictoriaMetrics
+        type: prometheus
+        url: http://victoria-metrics-single-server.monitoring.svc.cluster.local:8428
+        access: proxy
+        isDefault: true
+        uid: VictoriaMetrics
+        editable: true
+        jsonData:
+          timeInterval: "15s"
+
+      - name: Loki
+        type: loki
+        url: http://loki.monitoring.svc.cluster.local:3100
+        access: proxy
+        uid: Loki
+        editable: true
+
+      - name: Tempo
+        type: tempo
+        url: http://tempo.monitoring.svc.cluster.local:3200
+        access: proxy
+        uid: Tempo
+        editable: true
+        jsonData:
+          tracesToLogsV2:
+            datasourceUid: Loki
+            filterByTraceID: true

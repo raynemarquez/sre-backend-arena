@@ -1,0 +1,43 @@
+# values-tempo.yaml — Grafana Tempo (trace backend)
+# Chart: grafana/tempo  Release: tempo  Namespace: monitoring
+#
+
+tempo:
+  resources:
+    requests:
+      cpu: "20m"
+      memory: "25Mi"
+    limits:
+      cpu: "100m"
+      memory: "60Mi"
+
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
+      wal:
+        path: /var/tempo/wal
+
+config: |
+  multitenancy_enabled: false
+  compactor:
+    compaction:
+      block_retention: 6h
+  distributor:
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+  ingester:
+    lifecycler:
+      ring:
+        replication_factor: 1
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces

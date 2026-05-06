@@ -1,0 +1,12 @@
+{{- if .Values.ingress.enabled -}}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: wizard-ratelimit
+  namespace: wizard
+spec:
+  rateLimit:
+    average: 10000 # RPS médio permitido
+    burst: 20000   # Pico de RPS permitido
+    period: 1s
+{{- end -}}

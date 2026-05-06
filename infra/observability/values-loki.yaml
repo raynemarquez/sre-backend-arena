@@ -1,0 +1,72 @@
+# values-loki.yaml — Grafana Loki (log backend)
+# Chart: grafana/loki  versão 5.x  Release: loki  Namespace: monitoring
+#
+# IMPORTANTE: usar chart v5.x (não v6+).
+# O chart v6+ assumiu modo distribuído por padrão e exige object storage
+# (S3/GCS) mesmo com deploymentMode: SingleBinary configurado.
+# v5.x suporta single binary com filesystem sem configuração extra.
+#
+# Instalação:
+#   helm upgrade --install loki grafana/loki --version 5.47.2 \
+#     -n monitoring -f infra/observability/values-loki.yaml
+# ---------------------------------------------------------------------------
+
+loki:
+  auth_enabled: false
+
+  commonConfig:
+    replication_factor: 1
+
+  storage:
+    type: filesystem
+
+  schemaConfig:
+    configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+
+  limits_config:
+    ingestion_rate_mb: 4
+    ingestion_burst_size_mb: 8
+    max_streams_per_user: 100
+    retention_period: 24h
+
+singleBinary:
+  replicas: 1
+  resources:
+    requests:
+      cpu: "20m"
+      memory: "40Mi"
+    limits:
+      cpu: "50m"
+      memory: "60Mi"
+  persistence:
+    enabled: true
+    size: 2Gi
+
+# Desabilita componentes do modo distribuído
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
+
+gateway:
+  enabled: false
+
+monitoring:
+  selfMonitoring:
+    enabled: false
+    grafanaAgent:
+      installOperator: false
+  lokiCanary:
+    enabled: false
+
+test:
+  enabled: false

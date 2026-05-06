@@ -1,0 +1,77 @@
+# values-grafana.yaml — Grafana standalone (k3d)
+# Chart: grafana/grafana  Release: grafana  Namespace: monitoring
+#
+# Antes do helm install, criar o secret UMA VEZ:
+#   kubectl create secret generic grafana-admin-secret \
+#     --from-literal=admin-user=admin \
+#     --from-literal=admin-password=TROQUE_AQUI \
+#     -n monitoring
+
+admin:
+  existingSecret: grafana-admin-secret
+  userKey: admin-user
+  passwordKey: admin-password
+
+resources:
+  requests:
+    cpu: "25m"
+    memory: "70Mi"
+  limits:
+    cpu: "100m"
+    memory: "150Mi"   
+
+# Sidecars desabilitados para economizar memória (usaremos provisionamento via ConfigMap mount)
+sidecar:
+  dashboards:
+    enabled: false
+  datasources:
+    enabled: false
+  alerts:
+    enabled: false
+
+grafana.ini:
+  unified_alerting:
+    enabled: true
+    min_interval: 10s
+
+  alerting:
+    enabled: false
+
+  feature_toggles:
+    unifiedStorageSearch: false
+
+  analytics:
+    reporting_enabled: false
+    check_for_updates: false
+
+  plugins:
+    enable_alpha: false
+    
+extraEnvs:
+  - name: GF_UNIFIED_STORAGE_SEARCH_ENABLED
+    value: "false"
+
+extraConfigmapMounts:
+  - name: wizard-datasource
+    mountPath: /etc/grafana/provisioning/datasources/datasource.yaml
+    subPath: datasource.yaml
+    configMap: wizard-datasource-monitoring
+    readOnly: true
+
+  - name: wizard-dashboard-provider
+    mountPath: /etc/grafana/provisioning/dashboards/provider.yaml
+    subPath: provider.yaml
+    configMap: wizard-dashboard-provider-monitoring
+    readOnly: true
+
+  - name: wizard-alert-provisioning
+    mountPath: /etc/grafana/provisioning/alerting/alerting.yaml
+    subPath: alerting.yaml
+    configMap: wizard-alert-provisioning-monitoring
+    readOnly: true
+
+  - name: wizard-dashboard-json
+    mountPath: /var/lib/grafana/dashboards/wizard-dashboard.json
+    subPath: wizard-dashboard.json
+    configMap: wizard-intelligence-network-dashboard
+    readOnly: true

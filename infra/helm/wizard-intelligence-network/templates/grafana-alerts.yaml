@@ -1,0 +1,205 @@
+ {{- if .Values.grafanaAlerts.enabled -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wizard-intelligence-network.fullname" . }}-alerts
+  namespace: monitoring
+  labels:
+    {{- include "wizard-intelligence-network.labels" . | nindent 4 }}
+    grafana_alert: "1"
+data:
+  wizard-alerts.yaml: |-
+    apiVersion: 1
+    groups:
+      - orgId: 1
+        name: wizard-slo
+        folder: Wizard Intelligence Network
+        interval: 1m
+        rules:
+          - uid: wizard-slo-availability
+            title: SLO — Disponibilidade abaixo de 99.9%
+            condition: C
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: VictoriaMetrics
+                model:
+                  expr: |
+                    (
+                      sum(rate(api_requests_total{job="kubernetes-pods-wizard",namespace="wizard",http_status=~"5.."}[5m]))
+                      /
+                      sum(rate(api_requests_total{job="kubernetes-pods-wizard",namespace="wizard"}[5m]))
+                    ) * 100
+                  instant: true
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+                  refId: A
+              - refId: C
+                datasourceUid: __expr__
+                model:
+                  conditions:
+                    - evaluator:
+                        params: [0.1]
+                        type: gt
+                      operator:
+                        type: and
+                      query:
+                        params: [A]
+                      reducer:
+                        type: last
+                  datasource:
+                    type: __expr__
+                    uid: __expr__
+                  expression: A
+                  refId: C
+                  type: threshold
+            noDataState: NoData
+            execErrState: Error
+            for: 2m
+            annotations:
+              summary: "Alta taxa de erro — SLO 99.9% em risco"
+              description: "Taxa de erro acima de 0.1% nos últimos 5 minutos."
+            labels:
+              severity: critical
+              team: wizards
+
+          - uid: wizard-slo-latency
+            title: SLO — Latência p99 acima de 300ms
+            condition: C
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: VictoriaMetrics
+                model:
+                  expr: |
+                    histogram_quantile(0.99,
+                      sum(rate(http_request_duration_seconds_bucket{job="kubernetes-pods-wizard",namespace="wizard",endpoint=~"/wizard.*"}[5m])) by (le)
+                    )
+                  instant: true
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+                  refId: A
+              - refId: C
+                datasourceUid: __expr__
+                model:
+                  conditions:
+                    - evaluator:
+                        params: [0.3]
+                        type: gt
+                      operator:
+                        type: and
+                      query:
+                        params: [A]
+                      reducer:
+                        type: last
+                  datasource:
+                    type: __expr__
+                    uid: __expr__
+                  expression: A
+                  refId: C
+                  type: threshold
+            noDataState: NoData
+            execErrState: Error
+            for: 5m
+            annotations:
+              summary: "Latência p99 acima do SLO"
+              description: "Latência p99 acima de 300ms nos últimos 5 minutos."
+            labels:
+              severity: warning
+              team: wizards
+
+          - uid: wizard-circuit-breaker
+            title: Circuit Breaker Aberto
+            condition: C
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 60
+                  to: 0
+                datasourceUid: VictoriaMetrics
+                model:
+                  expr: sum(rate(api_errors_total{job="kubernetes-pods-wizard",namespace="wizard",type="circuit_breaker"}[1m])) or on() vector(0)
+                  instant: true
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+                  refId: A
+              - refId: C
+                datasourceUid: __expr__
+                model:
+                  conditions:
+                    - evaluator:
+                        params: [0]
+                        type: gt
+                      operator:
+                        type: and
+                      query:
+                        params: [A]
+                      reducer:
+                        type: last
+                  datasource:
+                    type: __expr__
+                    uid: __expr__
+                  expression: A
+                  refId: C
+                  type: threshold
+            noDataState: NoData
+            execErrState: Error
+            for: 1m
+            annotations:
+              summary: "Circuit Breaker Aberto"
+              description: "HP-API indisponível. Sistema operando em modo fallback."
+            labels:
+              severity: warning
+              team: wizards
+
+          - uid: wizard-cache-hit-rate
+            title: Cache Hit Rate baixo (< 50%)
+            condition: C
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 600
+                  to: 0
+                datasourceUid: VictoriaMetrics
+                model:
+                  expr: |
+                    sum(rate(cache_hits_total{job="kubernetes-pods-wizard",namespace="wizard"}[5m]))
+                    /
+                    (sum(rate(cache_hits_total{job="kubernetes-pods-wizard",namespace="wizard"}[5m])) + sum(rate(cache_misses_total{job="kubernetes-pods-wizard",namespace="wizard"}[5m])))
+                  instant: true
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+                  refId: A
+              - refId: C
+                datasourceUid: __expr__
+                model:
+                  conditions:
+                    - evaluator:
+                        params: [0.5]
+                        type: lt
+                      operator:
+                        type: and
+                      query:
+                        params: [A]
+                      reducer:
+                        type: last
+                  datasource:
+                    type: __expr__
+                    uid: __expr__
+                  expression: A
+                  refId: C
+                  type: threshold
+            noDataState: NoData
+            execErrState: Error
+            for: 10m
+            annotations:
+              summary: "Baixa taxa de Cache Hit"
+              description: "Menos de 50% das requisições servidas pelo cache nos últimos 10 minutos."
+            labels:
+              severity: info
+              team: wizards
+{{- end -}}

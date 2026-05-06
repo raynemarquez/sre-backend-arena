@@ -1,0 +1,8 @@
+apiVersion: v2
+name: wizard-intelligence-network
+description: Wizard Intelligence Network - SRE Backend Challenge
+version: 1.0.0
+appVersion: "1.0.0"
+maintainers:
+  - name: Rayne Marquez Piedade
+    email: rmpiedade@hotmail.com

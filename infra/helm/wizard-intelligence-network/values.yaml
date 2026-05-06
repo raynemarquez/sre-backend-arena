@@ -1,0 +1,101 @@
+# values.yaml — wizard-intelligence-network
+# Ambiente local (k3d) — budget: 1.5 CPU / 350MB RAM total
+#
+# Deploy:
+#   helm upgrade --install wizard infra/helm/wizard-intelligence-network -n wizard --create-namespace -f infra/helm/wizard-intelligence-network/values.yaml
+# ---------------------------------------------------------------------------
+
+replicaCount: 1
+
+image:
+  repository: wizard-intelligence-network
+  pullPolicy: Never
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: "wizard-intelligence-network"
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/path: "/metrics"
+  prometheus.io/port: "8000"
+
+# Configurações de Segurança (Best Practices SRE)
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  capabilities:
+    drop:
+      - ALL
+
+# Service otimizado para ClusterIP (mais rápido dentro do cluster)
+service:
+  type: ClusterIP
+  port: 8000
+  targetPort: 8000
+
+# Ingress (Traefik k3d) — Porta de entrada para os 10k RPS
+ingress:
+  enabled: true
+  className: "traefik"
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    # Otimizações Traefik para alto tráfego
+    traefik.ingress.kubernetes.io/router.middlewares: "wizard-ratelimit@kubernetescrd"
+  hosts:
+    - host: wizard-arena.local
+      paths:
+        - path: /
+          pathType: Prefix
+
+# Budget de Recursos (350Mi TOTAL para a stack)
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m" # Permitir picos de CPU para processar os 10k RPS
+    memory: "180Mi"
+
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 3
+  # Escala rapidamente quando a CPU bater 60% para não enfileirar requisições
+  targetCPUUtilizationPercentage: 60
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Observabilidade — provisioning estático (sem sidecars)
+grafanaDatasource:
+  enabled: true
+
+grafanaAlerts:
+  enabled: true
+
+grafanaDashboard:
+  enabled: true
+
+# Desativar ServiceMonitor (usaremos anotações para o VictoriaMetrics)
+serviceMonitor:
+  enabled: false
+
+prometheusRules:
+  enabled: false

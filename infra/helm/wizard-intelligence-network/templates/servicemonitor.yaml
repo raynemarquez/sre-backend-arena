@@ -1,0 +1,24 @@
+{{/*
+  scrape-config.yaml
+  
+  Com VictoriaMetrics Single (sem operator), o scrape é feito via
+  annotations nos pods — não é necessário nenhum recurso Kubernetes adicional.
+
+  As annotations já estão configuradas em values.yaml:
+    prometheus.io/scrape: "true"
+    prometheus.io/path:   "/metrics"
+    prometheus.io/port:   "8000"
+
+  O VictoriaMetrics Single lê essas annotations via kubernetes_sd_configs
+  definido em values-vm-single.yaml (job: kubernetes-pods).
+
+  Este arquivo é mantido apenas para documentação.
+  serviceMonitor.enabled controla se este template gera algum recurso.
+*/}}
+{{- if .Values.serviceMonitor.enabled -}}
+{{/*
+  Sem operator VictoriaMetrics, VMServiceScrape não existe.
+  O scrape é feito automaticamente pelas annotations do pod.
+  Nenhum recurso adicional necessário.
+*/}}
+{{- end -}}

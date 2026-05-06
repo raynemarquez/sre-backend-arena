@@ -1,0 +1,79 @@
+# values-promtail.yaml — Promtail (agente de coleta de logs)
+# Chart: grafana/promtail versão 6.x  Release: promtail  Namespace: monitoring
+# Fixado em 6.x — v7+ usa Alloy por padrão e quebra a config
+
+config:
+  logLevel: info
+  serverPort: 3101
+
+  clients:
+    - url: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
+
+  snippets:
+    scrapeConfigs: |
+      - job_name: wizard-pods
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [wizard]
+        pipeline_stages:
+          - cri: {}
+          - json:
+              expressions:
+                level: level
+                trace_id: trace_id
+          - labels:
+              level:
+              trace_id:
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: __host__
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            target_label: container
+          - replacement: /var/log/pods/*$1*/*/*.log
+            source_labels: [__meta_kubernetes_pod_uid]
+            target_label: __path__
+          - replacement: wizard-intelligence-network
+            target_label: service_name
+
+defaultVolumes:
+  - name: pods-logs
+    hostPath:
+      path: /var/log/pods
+
+defaultVolumeMounts:
+  - name: pods-logs
+    mountPath: /var/log/pods
+    readOnly: true
+
+resources:
+  requests:
+    cpu: "20m"
+    memory: "30Mi"
+  limits:
+    cpu: "50m"
+    memory: "50Mi"
+
+tolerations:
+  - effect: NoSchedule
+    operator: Exists
+
+# Adiciona após o defaultVolumeMounts existente:
+extraVolumes:
+  - name: positions
+    emptyDir: {}
+
+extraVolumeMounts:
+  - name: positions
+    mountPath: /run/promtail
+
+# Aponta o positions file para o volume
+config:
+  positions:
+    filename: /run/promtail/positions.yaml

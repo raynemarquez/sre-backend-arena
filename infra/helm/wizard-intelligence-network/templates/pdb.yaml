@@ -1,0 +1,14 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "wizard-intelligence-network.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "wizard-intelligence-network.labels" . | nindent 4 }}
+spec:
+  # Garante que pelo menos 1 pod esteja sempre disponível durante
+  # operações de manutenção (node drain, rolling update, etc.)
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "wizard-intelligence-network.selectorLabels" . | nindent 6 }}
