@@ -113,7 +113,7 @@ hp_api_client = HPApiClient()
 async def lifespan(app: FastAPI):
     logger.info("startup", message="Starting Wizard Intelligence Network")
 
-    # Warmup 
+    # Warmup
     try:
         await hp_api_client.warmup_cache()
         logger.info("cache_ready", ready=True)
