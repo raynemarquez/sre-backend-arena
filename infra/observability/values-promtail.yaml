@@ -11,6 +11,8 @@ config:
 
   clients:
     - url: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
+      batchwait: 5s
+      batchsize: 1048576 # 1MB por envio
 
   positions:
     filename: /run/promtail/positions.yaml
@@ -30,7 +32,6 @@ config:
                 trace_id: trace_id
           - labels:
               level:
-              trace_id:
         relabel_configs:
           - source_labels: [__meta_kubernetes_pod_node_name]
             target_label: __host__
@@ -67,11 +68,16 @@ extraVolumeMounts:
 resources:
   requests:
     cpu: "20m"
-    memory: "30Mi"
+    memory: "40Mi"
   limits:
     cpu: "50m"
-    memory: "50Mi"
+    memory: "80Mi"
 
+readinessProbe:
+  initialDelaySeconds: 10
+  timeoutSeconds: 5
+  periodSeconds: 10
+  
 tolerations:
   - effect: NoSchedule
     operator: Exists

@@ -21,7 +21,7 @@ server:
       memory: "60Mi"    # Request baixo — scheduler não reserva mais que isso
     limits:
       cpu: "150m"
-      memory: "100Mi"   # Hard limit: se passar disso, OOMKill (preferível a travar o node)
+      memory: "120Mi"   
 
   extraArgs:
     envflag.enable: "true"

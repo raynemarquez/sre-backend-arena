@@ -1,3 +1,4 @@
+import os
 import time
 import uuid
 import contextvars
@@ -139,7 +140,8 @@ app = FastAPI(
 )
 
 # Tracing OpenTelemetry — no-op se OTEL_EXPORTER_OTLP_ENDPOINT não estiver definido
-setup_tracing(app)
+if os.getenv("ENABLE_TRACING") == "true":
+    setup_tracing(app)
 
 
 # ---------------------------------------------------------------------------

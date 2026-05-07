@@ -58,11 +58,15 @@ spec:
               value: {{ .Values.app.env | default "production" | quote }}
             - name: APP_VERSION
               value: {{ .Chart.AppVersion | quote }}
-            # OTEL Configuration
-            - name: OTEL_SERVICE_NAME
-              value: {{ include "wizard-intelligence-network.fullname" . | quote }}
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: {{ .Values.otel.endpoint | default "http://tempo.monitoring.svc:4318" | quote }}
+# OTEL Configuration
+#{{- if .Values.otel }}
+#    {{- if .Values.otel.enabled }}
+#        - name: OTEL_SERVICE_NAME
+#          value: {{ include "wizard-intelligence-network.fullname" . | quote }}
+#        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+#          value: {{ .Values.otel.endpoint | default "http://tempo.monitoring.svc:4318" | quote }}
+#  {{- end }}
+#{{- end }}
 
           # Startup Probe: Aguarda o warmup do cache (pode demorar na primeira vez)
           startupProbe:
@@ -88,8 +92,9 @@ spec:
             httpGet:
               path: /ready
               port: http
+            initialDelaySeconds: 5  
             periodSeconds: 10
-            failureThreshold: 3
+            failureThreshold: 5
             timeoutSeconds: 5
 
           resources:

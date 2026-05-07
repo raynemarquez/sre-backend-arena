@@ -17,6 +17,6 @@ spec:
               service:
                 name: {{ include "wizard-intelligence-network.fullname" $ }}
                 port:
-                  number: {{ $.Values.service.port }}
+                  name: http
           {{- end }}
     {{- end }}

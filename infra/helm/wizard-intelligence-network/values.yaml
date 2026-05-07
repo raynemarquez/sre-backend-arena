@@ -32,7 +32,9 @@ app:
       value: "info"
 
 otel:
-  endpoint: "http://tempo.monitoring.svc:4318"
+  enabled: false
+  endpoint: ""
+#  endpoint: "http://tempo.monitoring.svc:4318"
 
 serviceAccount:
   create: true
@@ -87,13 +89,13 @@ resources:
     memory: "60Mi"
   limits:
     cpu: "500m" # Permitir picos de CPU para processar os 10k RPS
-    memory: "180Mi"
+    memory: "110Mi"
 
 
 autoscaling:
   enabled: true
   minReplicas: 1
-  maxReplicas: 3
+  maxReplicas: 2
   # Escala rapidamente quando a CPU bater 60% para não enfileirar requisições
   targetCPUUtilizationPercentage: 70
 

@@ -97,11 +97,12 @@ obs-install: ## Instala VictoriaMetrics + Grafana + Tempo + Loki + Promtail
 		-f infra/observability/values-grafana.yaml \
 		--wait --timeout 3m
 
-	helm upgrade --install tempo grafana/tempo \
-		-n $(MONITORING_NS) \
-		-f infra/observability/values-tempo.yaml \
-		--wait --timeout 3m
-
+#
+#	helm upgrade --install tempo grafana/tempo \
+#		-n $(MONITORING_NS) \
+#		-f infra/observability/values-tempo.yaml \
+#		--wait --timeout 3m
+#
 # v5.x: single binary com filesystem, sem exigir object storage
 # v6+ exige S3/GCS mesmo no modo single binary
 	helm upgrade --install loki grafana/loki --version 5.47.2 \

@@ -31,27 +31,27 @@ data:
         access: proxy
         uid: Loki
         editable: true
-        jsonData:
-          # Link automático: trace_id no log → abre trace no Tempo
-          derivedFields:
-            - name: TraceID
-              matcherRegex: '"trace_id":"(\w+)"'
-              url: "$${__value.raw}"
-              datasourceUid: Tempo
+#       jsonData:
+#         # Link automático: trace_id no log → abre trace no Tempo
+#          derivedFields:
+#            - name: TraceID
+#              matcherRegex: '"trace_id":"(\w+)"'
+#              url: "$${__value.raw}"
+#              datasourceUid: Tempo
 
-      - name: Tempo
-        type: tempo
-        url: http://tempo.monitoring.svc.cluster.local:3200
-        access: proxy
-        uid: Tempo
-        editable: true
-        jsonData:
-          # Link automático: trace → logs correspondentes no Loki
-          tracesToLogsV2:
-            datasourceUid: Loki
-            filterByTraceID: true
-          serviceMap:
-            datasourceUid: VictoriaMetrics
+#      - name: Tempo
+#        type: tempo
+#        url: http://tempo.monitoring.svc.cluster.local:3200
+#        access: proxy
+#        uid: Tempo
+#        editable: true
+#        jsonData:
+#          # Link automático: trace → logs correspondentes no Loki
+#          tracesToLogsV2:
+#            datasourceUid: Loki
+#            filterByTraceID: true
+#          serviceMap:
+#            datasourceUid: VictoriaMetrics
 
 ---
 # 2. Dashboard provider — diz ao Grafana onde buscar os JSONs

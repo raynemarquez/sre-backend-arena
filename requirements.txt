@@ -20,10 +20,10 @@ structlog==24.1.0
 
 # OpenTelemetry (traces → Tempo)
 # Ativado apenas se OTEL_EXPORTER_OTLP_ENDPOINT estiver definido
-opentelemetry-sdk==1.24.0
-opentelemetry-exporter-otlp-proto-http==1.24.0
-opentelemetry-instrumentation-fastapi==0.45b0
-opentelemetry-instrumentation-httpx==0.45b0
+#opentelemetry-sdk==1.24.0
+#opentelemetry-exporter-otlp-proto-http==1.24.0
+#opentelemetry-instrumentation-fastapi==0.45b0
+#opentelemetry-instrumentation-httpx==0.45b0
 
 # Testes
 pytest==8.2.0
