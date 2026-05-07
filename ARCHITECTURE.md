@@ -1,172 +1,181 @@
 # ARCHITECTURE.md — Wizard Intelligence Network
 
-## 1. Visão Geral
+## 1. Visão geral
 
-API HTTP que retorna inteligência sobre bruxos do universo Harry Potter, integrando com a [HP API](https://hp-api.onrender.com). Construída para suportar **10.000 RPS** dentro de um budget rígido de **1.5 CPU / 350MB RAM** para a stack completa em Kubernetes local (k3d).
+API HTTP que retorna inteligência sobre bruxos do universo Harry Potter, integrando com a [HP API](https://hp-api.onrender.com). Construída para suportar **10.000 RPS** dentro de um budget de **1.5 CPU / 350MB RAM** para a stack completa em Kubernetes local (k3d).
 
-O design parte de uma premissa central: **os dados da HP API são estáticos**. Personagens não mudam entre chamadas. Isso permite uma estratégia agressiva de cache in-memory com warmup na inicialização, eliminando praticamente todo I/O externo em operação normal e tornando a latência dominada pelo processamento local — na faixa de microssegundos.
+O design parte de uma premissa central: **os dados da HP API são estáticos**. Personagens não mudam entre chamadas. Isso viabiliza uma estratégia agressiva de cache in-memory com warmup na inicialização, eliminando praticamente todo I/O externo em operação normal.
 
 ---
 
-## 2. Fluxo de uma Requisição
+## 2. Fluxo de uma requisição
 
 ```
 GET /wizard/{name}
       │
       ▼
 [Traefik Ingress — k3d porta 8080]
-  Rate limit de borda via IngressRouteCRD middleware
+  Middleware: RateLimit (10k avg RPS, burst 20k)
       │
       ▼
-[FastAPI + uvicorn (uvloop + httptools) — 1 worker por pod]
+[FastAPI + uvicorn — uvloop + httptools — 1 worker por pod]
   Middleware de observabilidade:
-    · Gera/propaga X-Request-ID (correlation_id)
-    · Injeta trace_id nos logs estruturados
-    · Registra métricas de latência e status
+    · Propaga / gera X-Request-ID (correlation_id)
+    · Injeta correlation_id, trace_id no contextvars do structlog
+    · Registra REQUEST_COUNT, REQUEST_LATENCY por endpoint
+    · Atualiza gauge CIRCUIT_BREAKER_STATE a cada request
       │
-      ├─ 1. Cache L1: _AsyncTTLCache (in-memory, TTL 5min)
-      │       Lookup O(1) por nome normalizado (lowercase + strip)
-      │       Hit válido  → retorna imediatamente, ~0ms
+      ├─ L1: _AsyncTTLCache (in-memory, asyncio.Lock, TTL 5 min)
+      │       Lookup por nome normalizado (lowercase + strip) — O(1)
+      │       Hit válido  → retorna ~0ms, header X-Cache: HIT
       │       Hit stale   → guardado para fallback se API falhar
       │
-      ├─ 2. Index em memória (pré-carregado no warmup)
-      │       Se L1 expirou, busca no dict _index (O(1))
+      ├─ L2: index em memória (_index dict, populado no warmup)
       │       Re-enriquece (powerScore + loyalty) e repopula L1
       │
-      └─ 3. HP API externa (apenas em cache miss total)
-              Token Bucket (10 req/s, burst 20)
-                └─ Retry via tenacity (3x, backoff 2s → 4s → 8s)
-                      └─ Circuit Breaker pybreaker
-                            5 falhas → abre; reset após 10s
-                            └─ Se aberto: stale cache ou HTTP 503
+      └─ HP API externa (apenas em cache miss total)
+              _TokenBucketRateLimiter (10 req/s, burst 20)
+                └─ @retry tenacity (3x, backoff 2s→4s→8s)
+                      Retry apenas em httpx.RequestError (rede/timeout)
+                      Não retenta em HTTPStatusError (4xx/5xx)
+                          └─ _fetch_with_circuit_breaker
+                                circuit_breaker (pybreaker)
+                                fail_max=5, reset_timeout=10s
+                                API pública apenas (sem atributos privados)
+                                    └─ Stale cache ou HTTP 503
 ```
 
-### Por que cache in-memory em vez de Redis?
+---
 
-Redis adicionaria ~30MB de RAM (o deployment + memória de dados), latência de rede por request (~1ms) e um ponto de falha extra no cluster — tudo isso sem benefício real, dado que os dados da HP API **não mudam**. O cache in-memory entrega latência ~0ms e simplicidade operacional.
+## 3. Componentes da aplicação
 
-A única desvantagem — cache não compartilhado entre réplicas — é mitigada pelo warmup automático: cada pod popula seu próprio cache na inicialização, antes de aceitar tráfego. Com dados estáticos, um miss eventual numa réplica gera no máximo uma chamada à HP API por TTL, controlada pelo rate limiter.
+### `src/main.py`
 
-Se o sistema evoluísse para dados dinâmicos ou dezenas de réplicas, a adição natural seria Redis com TTL configurável.
+Contém a aplicação FastAPI, o middleware de observabilidade, as métricas Prometheus e os três endpoints de infraestrutura (`/health`, `/ready`, `/metrics`) além do endpoint de negócio (`/wizard/{name}`).
+
+O tracing OpenTelemetry é ativado condicionalmente via `ENABLE_TRACING=true`. Quando a variável não está definida, o bloco `setup_tracing()` não é chamado e não há overhead algum.
+
+### `src/services/hp_api.py`
+
+Toda a lógica de resiliência vive aqui:
+
+- `_AsyncTTLCache` — cache in-memory com `asyncio.Lock()`, TTL configurável, maxsize com eviction LRU, retorno triplo `(valor, is_valid, is_stale)` para implementar o padrão stale-while-revalidate
+- `_TokenBucketRateLimiter` — token bucket assíncrono com refill contínuo, bloqueia até ter token disponível em vez de rejeitar a chamada
+- `_cb_record_failure` / `_cb_record_success` — wrappers que notificam o `pybreaker` via `circuit_breaker.call()` sem tocar em `_state_storage` ou `_inc_counter`
+- `HPApiClient.warmup_cache()` — chamado no lifespan do FastAPI, popula `_index` e o cache L1 com todos os personagens enriquecidos antes de aceitar tráfego
+
+### `src/observability/tracing.py`
+
+Setup do OpenTelemetry com `FastAPIInstrumentor` e `HTTPXClientInstrumentor`. Exporta via OTLP HTTP para o Tempo quando `OTEL_EXPORTER_OTLP_ENDPOINT` está definido. Implementado e testado, mas **desabilitado por padrão** no `values.yaml` (`otel.enabled: false`) para manter o budget de RAM local.
+
+### `src/models/wizard.py`
+
+Pydantic v2 model com os cinco campos da resposta. Garante serialização correta e validação de tipo em tempo de inicialização.
 
 ---
 
-## 3. Estratégia de Rate Limit (Client-side)
+## 4. Separação liveness / readiness / startup
 
-A HP API não publica limites oficiais — é um serviço público free tier hospedado no Render. Adotamos conservadorismo explícito:
+| Probe | Endpoint | O que verifica | Comportamento em falha |
+|-------|----------|----------------|------------------------|
+| Startup | `/ready` | cache pronto + CB fechado | K8s aguarda até `failureThreshold × periodSeconds` (10 min) antes de reiniciar |
+| Liveness | `/health` | processo vivo | K8s reinicia o pod |
+| Readiness | `/ready` | cache pronto + CB fechado | K8s retira o pod do Service sem reiniciá-lo |
 
-- **Algoritmo**: Token Bucket assíncrono, implementado com `asyncio.Lock()`
-- **Taxa**: 10 tokens/s, burst de 20 (absorve picos do retry)
-- **Comportamento**: bloqueia (aguarda token) em vez de rejeitar — nenhuma chamada à API externa é descartada, apenas atrasada
-- **Impacto real**: em operação normal após warmup, **zero chamadas** chegam à HP API, portanto o rate limiter nunca é acionado
+O `startupProbe` aponta para `/ready` (e não `/health`) porque o pod não deve receber tráfego antes do warmup terminar. Com `failureThreshold: 60` e `periodSeconds: 10`, o K8s aguarda até 10 minutos — tempo mais que suficiente para o warmup da HP API em condições adversas.
 
----
-
-## 4. Resiliência — Camadas de Defesa
-
-O sistema implementa defesa em profundidade: cada camada protege as camadas internas de serem acionadas desnecessariamente.
-
-| Camada | Mecanismo | Comportamento |
-|--------|-----------|---------------|
-| 1ª | Cache L1 válido (TTL ativo) | Retorna em ~0ms, sem I/O |
-| 2ª | Index em memória | Re-enriquece e retorna, sem chamada HTTP |
-| 3ª | Rate limiter (token bucket) | Throttle suave antes de chamar a API |
-| 4ª | Retry com backoff exponencial | 3 tentativas: 2s / 4s / 8s (somente `RequestError`) |
-| 5ª | Circuit Breaker | Para completamente após 5 falhas; reset em 10s |
-| 6ª | Stale cache fallback | Serve dado expirado se API indisponível |
-| 7ª | HTTP 503 | Somente se não houver nenhum dado em cache |
-
-**Decisão de design no Circuit Breaker**: o `pybreaker` é uma biblioteca síncrona. Para integrá-lo corretamente num event loop assíncrono sem tocar em atributos privados, o sucesso e a falha são notificados via `circuit_breaker.call()` com funções síncronas — `_cb_record_success()` e `_cb_record_failure()` — chamadas após a resolução da coroutine. Isso garante compatibilidade com versões futuras da biblioteca.
+O `/ready` verifica `hp_api_client._index` (não vazio = warmup concluído) e `circuit_breaker.current_state != "open"`. O `/health` retorna 200 sempre que o processo Python está vivo — sem verificação de dependências.
 
 ---
 
-## 5. Endpoints
+## 5. Cálculo do powerScore
 
-| Método | Path | Descrição |
-|--------|------|-----------|
-| `GET` | `/wizard/{name}` | Retorna inteligência sobre um bruxo |
-| `GET` | `/health` | Liveness probe — verifica se o processo está vivo |
-| `GET` | `/ready` | Readiness probe — verifica cache + circuit breaker |
-| `GET` | `/metrics` | Scrape endpoint Prometheus para VictoriaMetrics |
-
-**Separação liveness / readiness**: `/health` é leve e sempre responde 200 enquanto o processo Python estiver vivo. `/ready` retorna 503 se o cache não estiver populado ou se o circuit breaker estiver aberto — sinalizando ao K8s para retirar o pod do balanceamento sem reiniciá-lo.
-
-O `startupProbe` aponta para `/ready` com `failureThreshold: 60` (até 10 minutos), aguardando o warmup do cache antes de liberar tráfego. O `livenessProbe` aponta para `/health` e só reinicia o pod se o processo travar completamente.
-
----
-
-## 6. Cálculo do powerScore
-
-A HP API não fornece um campo de "poder". O score é calculado deterministicamente a partir de atributos reais de cada personagem:
+A HP API não fornece um campo de "poder". O score é calculado deterministicamente a partir de atributos reais:
 
 ```
-powerScore = 50  (base para qualquer entidade)
-           + 20  (se wizard == true)
-           + 15  (se house != "")
-           + 15  (se wand.wood != "" ou wand.core != "")
+powerScore = 50  (base)
+           + 20  (wizard == true)
+           + 15  (house != "")
+           + 15  (wand.wood != "" ou wand.core != "")
            ────
            máximo: 100
 ```
 
-O cálculo é **determinístico** — a mesma entrada sempre produz o mesmo resultado. Isso é essencial para consistência entre réplicas que não compartilham cache: dois pods diferentes retornam o mesmo `powerScore` para o mesmo personagem.
+O cálculo é determinístico — a mesma entrada sempre produz o mesmo resultado. Isso garante consistência entre réplicas que não compartilham cache: dois pods retornam o mesmo `powerScore` para o mesmo personagem.
 
 ---
 
-## 7. Budget de Recursos
+## 6. Métricas expostas
 
-O budget do desafio para ambiente local é **1.5 CPU / 350MB RAM** para toda a stack.
+| Métrica | Tipo | Labels | Descrição |
+|---------|------|--------|-----------|
+| `api_requests_total` | Counter | `method`, `endpoint`, `http_status` | Requisições totais (exceto `/health`, `/ready`, `/metrics`) |
+| `api_errors_total` | Counter | `type` | Erros por tipo: `not_found`, `circuit_breaker`, `internal_error` |
+| `cache_hits_total` | Counter | — | Lookups servidos do cache |
+| `cache_misses_total` | Counter | — | Lookups que precisaram da HP API |
+| `http_request_duration_seconds` | Histogram | `method`, `endpoint` | Latência com buckets de 5ms a 1s |
+| `circuit_breaker_open` | Gauge | — | `1` quando aberto, `0` quando fechado |
+
+Os buckets do histograma foram ajustados para os SLOs: `0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5, 1.0`. Isso permite calcular p99 < 300ms e p99 < 150ms com precisão no Grafana.
+
+---
+
+## 7. Budget de recursos
+
+Budget do desafio (ambiente local): **1.5 CPU / 350MB RAM** para toda a stack.
 
 | Componente | CPU request | CPU limit | RAM request | RAM limit |
 |------------|-------------|-----------|-------------|-----------|
-| App (2 réplicas — HPA max local) | 2 × 100m = **200m** | 2 × 500m = 1000m | 2 × 60Mi = **120Mi** | 2 × 180Mi = 360Mi |
-| VictoriaMetrics | **30m** | 150m | **60Mi** | 100Mi |
-| Grafana | **25m** | 100m | **60Mi** | 150Mi |
-| Tempo | **20m** | 100m | **25Mi** | 60Mi |
-| Loki | **20m** | 50m | **40Mi** | 60Mi |
+| App (2 réplicas — HPA max) | 2 × 100m = **200m** | 2 × 500m = 1000m | 2 × 60Mi = **120Mi** | 2 × 110Mi = 220Mi |
+| VictoriaMetrics | **30m** | 150m | **60Mi** | 120Mi |
+| Grafana | **25m** | 100m | **60Mi** | 100Mi |
+| Loki | **20m** | 100m | **40Mi** | 80Mi |
 | Promtail | **20m** | 50m | **30Mi** | 50Mi |
-| **TOTAL requests** | **315m** | 1450m | **335Mi** | 780Mi |
+| Tempo *(desabilitado)* | — | — | — | — |
+| **TOTAL requests** | **295m** | 1400m | **310Mi** | 570Mi |
 
-**Requests** são o que o scheduler Kubernetes reserva: **315m CPU e 335Mi RAM** — dentro do budget. **Limits** representam o teto teórico se todos os componentes estiverem sob carga máxima simultaneamente, o que não ocorre em operação normal.
+Os **requests** são o que o scheduler Kubernetes reserva e são o número relevante para o budget: **295m CPU e 310Mi RAM**, dentro dos limites de 1500m e 350Mi.
 
-Ajuste crítico para caber no budget:
+Os **limits** representam o teto teórico com todos os componentes no pico simultâneo — o que não ocorre em operação normal. A RAM limit da app por réplica foi reduzida para 110Mi (vs 180Mi em iterações anteriores) após observar que o processo Python fica em ~70–80Mi em carga.
 
-- `memory.allowedPercent: 30` no VictoriaMetrics limita o cache TSDB a ~30Mi, evitando que o processo suba para 200Mi+
+**Por que o Tempo está desabilitado por padrão**: Tempo + suas dependências adicionariam ~25Mi de RAM request e 60Mi de limit, forçando o limite total de RAM requests para ~335Mi — ainda dentro do budget mas sem margem. Como o tracing é opcional para o desafio e requer `ENABLE_TRACING=true` na aplicação, a decisão foi deixá-lo documentado e fácil de ativar, mas fora do `make all`.
 
 ---
 
-## 8. Observabilidade
+## 8. Infraestrutura como código
+
+Toda a infraestrutura é reproduzível a partir de um único comando (`make all`):
+
+| Camada | Ferramenta | Localização |
+|--------|-----------|-------------|
+| App: Deployment, Service, Ingress, HPA, PDB, NetworkPolicy, ServiceAccount | Helm chart | `infra/helm/wizard-intelligence-network/` |
+| Observabilidade: VictoriaMetrics, Grafana, Loki, Promtail | Helm values | `infra/observability/` |
+| Datasource, dashboard e alertas Grafana | ConfigMaps via Helm + kubectl apply | `grafana-alerts.yaml`, `grafana-dashboard.yaml`, `grafana-configmaps-monitoring.yaml` |
+
+O Grafana recebe datasources, dashboards e alertas exclusivamente via arquivos montados em `/etc/grafana/provisioning/` — sem configuração manual na UI e sem dependência de sidecars.
+
+---
+
+## 9. Observabilidade
 
 ### Stack
 
 ```
-App (Python/structlog) ──stdout──────────► Promtail ──► Loki (logs)
-App (Python/prometheus-client) ──/metrics──► VictoriaMetrics (métricas)
-App (Python/opentelemetry-sdk) ──OTLP HTTP──► Tempo (traces)
-                                                  │
-                                              Grafana (dashboards + alertas)
-                                             ╔══════════════════╗
-                                             ║  VictoriaMetrics ║
-                                             ║  Loki            ║
-                                             ║  Tempo           ║
-                                             ╚══════════════════╝
+App ──stdout──────────────► Promtail ──► Loki (logs)
+App ──/metrics────────────► VictoriaMetrics (métricas)
+App ──OTLP HTTP (opcional)► Tempo (traces)
+                                │
+                            Grafana
+                         ┌──────────────┐
+                         │ VictoriaMetrics │
+                         │ Loki            │
+                         │ Tempo           │
+                         └──────────────┘
 ```
-
-### Métricas customizadas
-
-| Métrica | Tipo | Descrição |
-|---------|------|-----------|
-| `api_requests_total` | Counter | Requisições por método, endpoint e status HTTP |
-| `api_errors_total` | Counter | Erros por tipo (not_found, circuit_breaker, internal_error) |
-| `http_request_duration_seconds` | Histogram | Latência com buckets ajustados para SLO de 300ms p99 |
-| `cache_hits_total` | Counter | Cache hits no lookup de personagens |
-| `cache_misses_total` | Counter | Cache misses (indica fetch à HP API) |
-| `circuit_breaker_open` | Gauge | 1 quando o circuit breaker está aberto, 0 quando fechado |
-
-Endpoints de infra (`/health`, `/ready`, `/metrics`) são excluídos das métricas de latência para não distorcer os percentis do SLO.
 
 ### Logs estruturados
 
-Todos os logs são emitidos em JSON via `structlog`. Cada log de requisição contém:
+Todos os logs são emitidos em JSON via `structlog`. O processor `_inject_trace_context` injeta `correlation_id`, `trace_id` e `otel_trace_id` em cada log a partir do `contextvars` por requisição. O Promtail extrai `level` e `trace_id` como labels Loki via pipeline `json`, permitindo filtrar por trace sem grep.
 
 ```json
 {
@@ -180,68 +189,35 @@ Todos os logs são emitidos em JSON via `structlog`. Cada log de requisição co
 }
 ```
 
-O `correlation_id` é propagado do header `X-Request-ID` enviado pelo caller (ou gerado internamente), devolvido no response via `X-Request-ID`. O Grafana tem `derivedFields` configurado no datasource Loki para transformar o `trace_id` em link direto para o trace correspondente no Tempo.
+### SLOs e alertas (como código)
 
-O Promtail extrai `level`, `trace_id` e `correlation_id` como labels Loki via pipeline `json`, permitindo filtrar logs por trace sem grep manual.
-
-### SLOs e alertas
-
-| SLO | Objetivo | Alerta |
-|-----|----------|--------|
-| Disponibilidade | 99.9% das requests com status != 5xx | Taxa de erro > 0.1% por 2 minutos |
-| Latência p99 | < 300ms no endpoint `/wizard/{name}` | p99 > 300ms por 5 minutos |
-| Circuit Breaker | Fechado (HP API acessível) | Qualquer abertura por 1 minuto |
-| Cache Hit Rate | > 50% das requests servidas do cache | Hit rate < 50% por 10 minutos |
-
-Todos os alertas e o dashboard são provisionados como código via ConfigMaps do Helm — sem configuração manual no Grafana.
-
-### Traces (OpenTelemetry)
-
-O tracing é ativado pela variável de ambiente `OTEL_EXPORTER_OTLP_ENDPOINT`. Se não estiver definida, o SDK opera em modo no-op sem overhead. Em produção, o endpoint aponta para o Tempo no namespace `monitoring` via OTLP HTTP (porta 4318).
-
-A instrumentação via `FastAPIInstrumentor` e `HTTPXClientInstrumentor` gera spans automaticamente para cada request HTTP recebido e cada chamada à HP API, permitindo visualizar end-to-end latency no Grafana.
-
----
-
-## 9. Infraestrutura como Código
-
-Toda a infraestrutura é versionada e reproduzível a partir de um único comando:
-
-```
-make all   # cria cluster k3d + instala observabilidade + faz deploy da app
-```
-
-| Camada | Ferramenta | Localização |
-|--------|-----------|-------------|
-| App (Deployment, Service, Ingress, HPA, PDB, NetworkPolicy) | Helm chart | `infra/helm/wizard-intelligence-network/` |
-| Observabilidade (VictoriaMetrics, Grafana, Tempo, Loki, Promtail) | Helm values | `infra/observability/` |
-| Datasources, dashboards e alertas Grafana | ConfigMaps via Helm | `infra/helm/.../templates/grafana-*.yaml` + `infra/observability/grafana-configmaps-monitoring.yaml` |
-| CI/CD | GitHub Actions | `.github/workflows/ci.yml` |
-
-O Grafana recebe datasources, dashboards e regras de alerta exclusivamente via ConfigMaps montados em `provisioning/` — nenhuma configuração é feita manualmente na UI.
+| SLO | Objetivo | Alerta | Severidade |
+|-----|----------|--------|-----------|
+| Disponibilidade | 99.9% das requests != 5xx | Taxa de erro > 0.1% por 2 min | `critical` |
+| Latência | p99 < 300ms no `/wizard/{name}` | p99 > 300ms por 5 min | `warning` |
+| Circuit Breaker | Fechado (HP API acessível) | Qualquer erro CB por 1 min | `warning` |
+| Cache Hit Rate | > 50% das requests do cache | Hit rate < 50% por 10 min | `info` |
 
 ---
 
 ## 10. CI/CD
 
-O pipeline GitHub Actions executa na ordem:
-
 ```
 lint-python ──┐
               ├──► test ──┐
-lint-helm   ──┘           ├──► build (Docker)
-security ─────────────────┘
+lint-helm   ──┘           └──► build (Docker com cache GHA)
+security ─────────────────────►
 ```
 
-| Job | O que valida |
-|-----|-------------|
-| `lint-python` | `ruff check`, `ruff format --check`, `mypy` |
-| `lint-helm` | `helm lint -f values.yaml`, `helm template -f values.yaml` |
-| `test` | `pytest` com cobertura mínima de 70% |
-| `security` | `bandit -r src/ -ll` (SAST estático) |
-| `build` | `docker build` com cache GitHub Actions |
+| Job | Ferramentas |
+|-----|------------|
+| `lint-python` | `ruff check`, `ruff format --check`, `mypy --ignore-missing-imports` |
+| `lint-helm` | `helm lint`, `helm template` (renderiza os manifests) |
+| `test` | `pytest --cov=src --cov-fail-under=70` |
+| `security` | `bandit -r src/ -ll --skip B104` |
+| `build` | `docker/build-push-action` com `push: false` |
 
-O `helm lint` e o `helm template` são executados com `-f values.yaml` para validar os values reais — sem isso, o CI usaria defaults e poderia mascarar referências quebradas.
+O deploy não está no pipeline de CI — o k3d local não expõe kubeconfig para o GitHub Actions. Em cloud, o step seria `helm upgrade --install` após o build, com kubeconfig injetado via secret.
 
 ---
 
@@ -249,30 +225,24 @@ O `helm lint` e o `helm template` são executados com `-f values.yaml` para vali
 
 ### Container
 
-- Executa como UID 1000 (non-root), grupo 1000
+- UID/GID 1000 (non-root) criados explicitamente no Dockerfile com `useradd`
 - `readOnlyRootFilesystem: true` — filesystem imutável em runtime
-- `/tmp` montado como `emptyDir` para permitir arquivos temporários do Python/uvicorn
+- `/tmp` como `emptyDir` — permite arquivos temporários do Python/uvicorn sem abrir o filesystem raiz
 - `allowPrivilegeEscalation: false`
-- `capabilities: drop: [ALL]` — zero capabilities Linux
+- `capabilities: drop: [ALL]`
 
-### Rede (NetworkPolicy)
+### NetworkPolicy
 
-O pod da aplicação só pode se comunicar com:
+| Direção | Origem / Destino | Porta |
+|---------|-----------------|-------|
+| Ingress | `kube-system` (Traefik) | TCP 8000 |
+| Ingress | `monitoring` (VictoriaMetrics scrape) | TCP 8000 |
+| Egress | `kube-system` (CoreDNS) | UDP/TCP 53 |
+| Egress | Internet pública exceto RFC1918 (HP API) | TCP 443 |
+| Egress | `monitoring` (Tempo) | TCP 4317, 4318 |
 
-| Direção | Destino | Porta |
-|---------|---------|-------|
-| Ingress | Namespace `kube-system` (Traefik) | TCP 8000 |
-| Ingress | Namespace `monitoring` (VictoriaMetrics scrape) | TCP 8000 |
-| Egress | Namespace `kube-system` (CoreDNS) | UDP/TCP 53 |
-| Egress | Internet pública, exceto RFC1918 (HP API) | TCP 443 |
-| Egress | Namespace `monitoring` (Tempo — OTLP) | TCP 4317, 4318 |
-
-Todo tráfego não listado acima é bloqueado por padrão.
+A regra de egress exclui `10.0.0.0/8`, `172.16.0.0/12` e `192.168.0.0/16` — bloqueia SSRF para endereços internos do cluster e da rede do host.
 
 ### Secrets
 
-Nenhum secret é armazenado em código, ConfigMap ou repositório. O secret do Grafana (`grafana-admin-secret`) é criado via `kubectl create secret` antes do deploy — instrução documentada no `Makefile` (`make obs-install`). O arquivo `.env` está explicitamente no `.gitignore`.
-
-### SAST
-
-O `bandit` roda em cada PR com `-ll` (medium e high severity). A exceção `B104` (binding `0.0.0.0`) é intencional e documentada — containers precisam fazer bind em todas as interfaces para receber tráfego do Kubernetes.
+O secret do Grafana (`grafana-admin-secret`) é criado via `kubectl create secret` antes do `make all` — nunca commitado. O `.env` está no `.gitignore` com entrada explícita para o arquivo sem extensão. O SAST do `bandit` roda em todo PR; a exceção `B104` (bind em `0.0.0.0`) é explícita e documentada.

@@ -7,77 +7,17 @@
 
 Este repositório foi criado como solução para o desafio proposto pelo @Kailimadev - [SRE Backend Arena](https://github.com/kailimadev/sre-backend-arena) — Cenário 1 (Harry Potter) 
 
-API HTTP de alta performance que integra com a [HP API](https://hp-api.onrender.com) para retornar inteligência sobre bruxos, suportando **10.000 RPS** com **budget de 1.5 CPU / 350MB RAM**.
+Serviço HTTP de inteligência sobre bruxos do universo Harry Potter, construído como resposta ao **SRE Backend Arena** da Jeitto.
+
+Integra com a [HP API](https://hp-api.onrender.com) e foi projetado para suportar **10.000 RPS** dentro de um budget rígido de **1.5 CPU / 350MB RAM** para a stack completa em Kubernetes local (k3d).
 
 ---
 
-## 🚀 Quick Start (Local)
-
-### Pré-requisitos
-
-- Docker, k3d, kubectl, helm, make
-
-### 1. Crie o secret do Grafana
-
-Antes do primeiro deploy, crie o secret com a senha de sua escolha:
-
-**Windows (PowerShell):**
-```powershell
-kubectl create secret generic grafana-admin-secret `
-  --from-literal=admin-user=admin `
-  --from-literal=admin-password=SUA_SENHA `
-  -n monitoring --dry-run=client -o yaml | kubectl apply -f -
-```
-
-**Linux / macOS:**
-```bash
-kubectl create secret generic grafana-admin-secret \
-  --from-literal=admin-user=admin \
-  --from-literal=admin-password=SUA_SENHA \
-  -n monitoring --dry-run=client -o yaml | kubectl apply -f -
-```
-
-Se precisar recuperar a senha depois:
-
-**Windows (PowerShell):**
-```powershell
-kubectl get secret grafana-admin-secret -n monitoring `
-  -o jsonpath="{.data.admin-password}" `
-  | % { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) }
-```
-
-**Linux / macOS:**
-```bash
-kubectl get secret grafana-admin-secret -n monitoring \
-  -o jsonpath="{.data.admin-password}" | base64 --decode
-```
-
-### 2. Suba a stack completa
-
-```bash
-make all
-```
-
-### 3. Acesse
-
-```bash
-make app-port        # API     → http://localhost:8000
-make grafana-port    # Grafana → http://localhost:3000 (admin / sua senha)
-```
-
-```bash
-curl http://localhost:8000/wizard/harry%20potter
-```
-
----
-
-## 📡 Endpoint
+## Endpoint
 
 ```
 GET /wizard/{name}
 ```
-
-**Resposta:**
 
 ```json
 {
@@ -85,89 +25,218 @@ GET /wizard/{name}
   "house": "Gryffindor",
   "species": "human",
   "wizard": true,
-  "powerScore": 100
+  "powerScore": 85
 }
 ```
 
-Outros endpoints: `GET /health` e `GET /metrics`
+---
+
+## Stack
+
+| Camada | Tecnologia |
+|--------|-----------|
+| Runtime | Python 3.11 + FastAPI + uvicorn (uvloop + httptools) |
+| Kubernetes local | k3d + Traefik |
+| Empacotamento | Helm 3 |
+| Métricas | VictoriaMetrics Single + prometheus-client |
+| Logs | structlog (JSON) + Promtail + Loki 5.x |
+| Traces | OpenTelemetry SDK + Grafana Tempo *(desabilitado por padrão)* |
+| Dashboards e alertas | Grafana (provisionado via ConfigMaps) |
+| CI | GitHub Actions |
 
 ---
 
-## 🏗️ Arquitetura
+## Pré-requisitos
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows)
+- [k3d](https://k3d.io) `>= 5.x`
+- [kubectl](https://kubernetes.io/docs/tasks/tools/)
+- [Helm](https://helm.sh) `>= 3.12`
+- [k6](https://k6.io) *(opcional — para load test)*
+
+No PowerShell, verifique:
+
+```powershell
+docker version
+k3d version
+kubectl version --client
+helm version
+```
+
+---
+
+## Setup completo (do zero)
+
+```powershell
+# 1. Clone o repositório
+git clone <repo-url>
+cd sre-backend-arena-hp
+
+# 2. Crie o secret do Grafana (uma única vez)
+kubectl create secret generic grafana-admin-secret `
+  --from-literal=admin-user=admin `
+  --from-literal=admin-password=TROQUE_AQUI `
+  -n monitoring --dry-run=client -o yaml | kubectl apply -f -
+
+# 3. Sobe tudo: cluster + observabilidade + app
+make all
+```
+
+O `make all` executa em sequência:
+1. `cluster-create` — cria o cluster k3d `wizard-cluster` com Traefik e portas 8080/8443 mapeadas
+2. `obs-install` — instala VictoriaMetrics, Grafana, Loki e Promtail via Helm
+3. `deploy` — faz build da imagem, importa para o cluster e instala o Helm chart
+
+---
+
+## Acessos
+
+```powershell
+# App
+make app-port
+# → http://localhost:8000/wizard/harry%20potter
+
+# Grafana
+make grafana-port
+# → http://localhost:3000  (admin / senha definida no secret)
+
+# Recuperar senha do Grafana
+make grafana-password
+```
+
+---
+
+## Comandos úteis
+
+```powershell
+make help          # lista todos os targets disponíveis
+make status        # status dos pods nas namespaces wizard e monitoring
+make logs          # tail dos logs da app
+make budget-check  # CPU e RAM atual dos pods (requer metrics-server)
+make lint          # ruff check + format check
+make test          # pytest com cobertura mínima 70%
+make security      # bandit SAST
+```
+
+---
+
+## Load test (k6)
+
+O load test está em `tests/unit/load_test.js` e suporta quatro cenários:
+
+```powershell
+# Pré-requisito: port-forward da app
+kubectl port-forward svc/wizard-intelligence-network 8000:8000 -n wizard
+
+# Em outro terminal:
+k6 run tests/unit/load_test.js                          # stress (padrão)
+k6 run --env SCENARIO=smoke tests/unit/load_test.js     # sanidade
+k6 run --env SCENARIO=stress tests/unit/load_test.js    # 10k RPS
+k6 run --env SCENARIO=soak tests/unit/load_test.js      # estabilidade prolongada
+k6 run --env SCENARIO=spike tests/unit/load_test.js     # burst repentino
+```
+
+---
+
+## Estrutura do projeto
 
 ```
-Request → [Traefik] → [FastAPI/uvicorn+uvloop]
-                           │
-                     Cache L1 (TTL in-memory)
-                           │ miss
-                     Cache L2 (index warmup)
-                           │ miss
-                     HP API externa
-                     (TokenBucket → Retry → CircuitBreaker)
-                           │ falha
-                     Stale cache fallback
+.
+├── src/
+│   ├── main.py                  # FastAPI app, middleware, métricas, endpoints
+│   ├── models/wizard.py         # Pydantic response model
+│   ├── services/hp_api.py       # Cliente HP-API, cache, retry, circuit breaker
+│   └── observability/tracing.py # Setup OpenTelemetry (ativado via ENV)
+├── tests/unit/
+│   ├── test_main.py             # Testes dos endpoints
+│   ├── test_hp_api.py           # Testes do cliente e cache
+│   └── load_test.js             # Load test k6
+├── infra/
+│   ├── helm/wizard-intelligence-network/
+│   │   ├── Chart.yaml
+│   │   ├── values.yaml
+│   │   ├── files/wizard-dashboard.json
+│   │   └── templates/
+│   │       ├── deployment.yaml
+│   │       ├── hpa.yaml
+│   │       ├── pdb.yaml
+│   │       ├── networkpolicy.yaml
+│   │       ├── ingress.yaml
+│   │       ├── traefik-middleware.yaml
+│   │       ├── grafana-alerts.yaml
+│   │       └── grafana-dashboard.yaml
+│   └── observability/
+│       ├── values-vm-single.yaml
+│       ├── values-grafana.yaml
+│       ├── values-loki.yaml
+│       ├── values-promtail.yaml
+│       ├── values-tempo.yaml
+│       └── grafana-configmaps-monitoring.yaml
+├── .github/workflows/ci.yml
+├── Dockerfile
+├── Makefile
+├── requirements.txt
+└── pyproject.toml
 ```
 
-Ver [ARCHITECTURE.md](ARCHITECTURE.md) para decisões detalhadas.
+---
+
+## Observabilidade
+
+### Dashboards e alertas
+
+Todos provisionados como código via ConfigMaps montados no Grafana — nenhuma configuração manual necessária. Após o `make all`:
+
+- **Dashboard Wizard Intelligence Network**: RPS, latência p50/p95/p99, cache hit rate, estado do circuit breaker, uso de recursos
+- **Alertas SLO**:
+  - Disponibilidade < 99.9% (taxa de erro > 0.1% por 2 min) → `critical`
+  - Latência p99 > 300ms por 5 min → `warning`
+  - Circuit breaker aberto por 1 min → `warning`
+  - Cache hit rate < 50% por 10 min → `info`
+
+### Traces (OpenTelemetry)
+
+O tracing está implementado em `src/observability/tracing.py` mas **desabilitado por padrão** para manter a stack dentro do budget local. Para ativar:
+
+```powershell
+# Instala o Tempo
+helm upgrade --install tempo grafana/tempo `
+  -n monitoring `
+  -f infra/observability/values-tempo.yaml `
+  --wait --timeout 3m
+
+# Habilita no values.yaml:
+# otel:
+#   enabled: true
+#   endpoint: "http://tempo.monitoring.svc:4318"
+# E adiciona ENABLE_TRACING=true nas env vars do deployment
+make deploy
+```
 
 ---
 
-## 📊 Observabilidade
+## Achievements declarados
 
-Stack: **VictoriaMetrics** + **Loki** + **Tempo** + **Promtail** + **Grafana**
-
-| Sinal    | Coleta               | Backend         |
-|----------|----------------------|-----------------|
-| Métricas | `/metrics` scrape    | VictoriaMetrics |
-| Logs     | Promtail (DaemonSet) | Loki            |
-| Traces   | OTel OTLP            | Tempo           |
-
-Logs e traces correlacionados via `trace_id` — clique em qualquer log no Grafana para abrir o trace correspondente no Tempo.
-
----
-
-## 🛡️ Confiabilidade
-
-| Prática           | Implementação                              |
-|-------------------|--------------------------------------------|
-| Cache in-memory   | `_AsyncTTLCache` TTL 5min + stale fallback |
-| Retry             | tenacity — 3x, backoff exponencial 2s→10s  |
-| Timeout           | httpx — connect 2s, read 5s               |
-| Circuit Breaker   | pybreaker — abre em 5 falhas, reset 10s   |
-| Rate Limit client | Token Bucket — 10 RPS, burst 20           |
+| Achievement | Evidência |
+|-------------|-----------|
+| **Cost Whisperer** | Stack completa em 315m CPU / 335Mi RAM (requests). Documentado em ARCHITECTURE.md §7 |
+| **SLO Guardian** | 4 alertas como código no `grafana-alerts.yaml` |
+| **Rate Limit Guardian** | Token Bucket 10 req/s no `hp_api.py` + middleware Traefik 10k avg/20k burst |
+| **IaC Wizard** | `make all` reproduz toda a stack do zero — Helm chart + observabilidade como código |
+| **Trace Master** | OTEL SDK instrumentado com `FastAPIInstrumentor` + `HTTPXClientInstrumentor` → Tempo |
+| **Chaos Survivor** | Stale cache fallback + circuit breaker garantem 0 erros 5xx com HP API inacessível |
 
 ---
 
-## 🏆 Achievements Declarados
+## CI/CD
 
-| Achievement         | Como                                     |
-|---------------------|------------------------------------------|
-| Rate Limit Guardian | Token Bucket client-side                 |
-| IaC Wizard          | Helm chart completo                      |
-| Trace Master        | OTel → Tempo, correlação log↔trace       |
-| SLO Guardian        | SLO availability + latência como alertas |
-| Cost Whisperer      | HPA com limites rígidos no budget        |
+O pipeline GitHub Actions roda em todo push para `main` e `develop`:
 
----
+```
+lint-python ──┐
+              ├──► test ──┐
+lint-helm   ──┘           └──► build (Docker)
+security ─────────────────────►
+```
 
-## 🔒 Segurança
-
-- Container non-root (UID 1000), `readOnlyRootFilesystem`
-- `allowPrivilegeEscalation: false`, capabilities `drop: ALL`
-- NetworkPolicy restringe egress para HP-API + monitoring
-- Secrets via `kubectl create secret` — nunca em código ou ConfigMap
-
----
-
-## 📋 Checklist
-
-- [x] Repositório público com código completo
-- [x] Helm chart (IaC)
-- [x] Dockerfile multi-stage, non-root
-- [x] VictoriaMetrics + Grafana + Loki + Tempo + Promtail
-- [x] Métricas customizadas + logs estruturados + traces
-- [x] SLO + Dashboard + Alertas como código
-- [x] Testes ≥ 70% coverage
-- [x] CI/CD (GitHub Actions)
-- [x] Rate limiting client-side
-- [x] Documentação de arquitetura
+O deploy é local via `make deploy` — não está no pipeline porque o k3d não possui kubeconfig acessível no GitHub Actions. Em cloud, o step de deploy seria adicionado após o build com `helm upgrade --install`.
