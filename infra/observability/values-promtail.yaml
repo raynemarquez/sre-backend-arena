@@ -1,6 +1,9 @@
 # values-promtail.yaml — Promtail (agente de coleta de logs)
 # Chart: grafana/promtail versão 6.x  Release: promtail  Namespace: monitoring
 # Fixado em 6.x — v7+ usa Alloy por padrão e quebra a config
+#
+# Usando modo nativo do chart v6 (config.clients + config.snippets).
+# NAO usar config.file — o chart v6 mescla com defaults e gera conflito.
 
 config:
   logLevel: info
@@ -9,8 +12,11 @@ config:
   clients:
     - url: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
 
+  positions:
+    filename: /run/promtail/positions.yaml
+
   snippets:
-    scrapeConfigs: |
+    extraScrapeConfigs: |
       - job_name: wizard-pods
         kubernetes_sd_configs:
           - role: pod
@@ -28,8 +34,6 @@ config:
         relabel_configs:
           - source_labels: [__meta_kubernetes_pod_node_name]
             target_label: __host__
-          - action: labelmap
-            regex: __meta_kubernetes_pod_label_(.+)
           - source_labels: [__meta_kubernetes_namespace]
             target_label: namespace
           - source_labels: [__meta_kubernetes_pod_name]
@@ -52,6 +56,14 @@ defaultVolumeMounts:
     mountPath: /var/log/pods
     readOnly: true
 
+extraVolumes:
+  - name: positions
+    emptyDir: {}
+
+extraVolumeMounts:
+  - name: positions
+    mountPath: /run/promtail
+
 resources:
   requests:
     cpu: "20m"
@@ -63,17 +75,3 @@ resources:
 tolerations:
   - effect: NoSchedule
     operator: Exists
-
-# Adiciona após o defaultVolumeMounts existente:
-extraVolumes:
-  - name: positions
-    emptyDir: {}
-
-extraVolumeMounts:
-  - name: positions
-    mountPath: /run/promtail
-
-# Aponta o positions file para o volume
-config:
-  positions:
-    filename: /run/promtail/positions.yaml

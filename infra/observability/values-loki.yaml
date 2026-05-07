@@ -33,7 +33,8 @@ loki:
   limits_config:
     ingestion_rate_mb: 4
     ingestion_burst_size_mb: 8
-    max_streams_per_user: 100
+    max_streams_per_user: 1000      # era 100, aumenta para 1000
+    max_global_streams_per_user: 1000
     retention_period: 24h
 
 singleBinary:
@@ -46,8 +47,13 @@ singleBinary:
       cpu: "50m"
       memory: "60Mi"
   persistence:
-    enabled: true
-    size: 2Gi
+    enabled: false
+  extraVolumes:
+    - name: loki-storage
+      emptyDir: {}
+  extraVolumeMounts:
+    - name: loki-storage
+      mountPath: /var/loki
 
 # Desabilita componentes do modo distribuído
 read:
