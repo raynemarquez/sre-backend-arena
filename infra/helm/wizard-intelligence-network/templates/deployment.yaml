@@ -67,7 +67,7 @@ spec:
           # Startup Probe: Aguarda o warmup do cache (pode demorar na primeira vez)
           startupProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
