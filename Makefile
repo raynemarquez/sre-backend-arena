@@ -62,6 +62,7 @@ build-push: build ## Build e importa imagem para o cluster k3d
 cluster-create: ## Cria cluster k3d local
 	k3d cluster create $(K3D_CLUSTER) \
 		--port "8080:80@loadbalancer" \
+		--port "8443:443@loadbalancer" \
 		--agents 1
 	kubectl create namespace $(NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
 	kubectl create namespace $(MONITORING_NS) --dry-run=client -o yaml | kubectl apply -f -
@@ -75,11 +76,11 @@ cluster-delete: ## Destroi o cluster k3d local
 # ─────────────────────────────────────────────
 .PHONY: obs-install
 obs-install: ## Instala VictoriaMetrics + Grafana + Tempo + Loki + Promtail
-	# Crie o secret do Grafana antes de rodar este comando:
-	#   kubectl create secret generic grafana-admin-secret \
-	#     --from-literal=admin-user=admin \
-	#     --from-literal=admin-password=SUA_SENHA \
-	#     -n monitoring --dry-run=client -o yaml | kubectl apply -f -
+# Crie o secret do Grafana antes de rodar este comando:
+#   kubectl create secret generic grafana-admin-secret \
+#     --from-literal=admin-user=admin \
+#     --from-literal=admin-password=SUA_SENHA \
+#     -n monitoring --dry-run=client -o yaml | kubectl apply -f -
 	helm repo add vm https://victoriametrics.github.io/helm-charts/ --force-update
 	helm repo add grafana https://grafana.github.io/helm-charts --force-update
 	helm repo update

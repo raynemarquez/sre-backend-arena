@@ -31,6 +31,13 @@ data:
         access: proxy
         uid: Loki
         editable: true
+        jsonData:
+          # Link automático: trace_id no log → abre trace no Tempo
+          derivedFields:
+            - name: TraceID
+              matcherRegex: '"trace_id":"(\w+)"'
+              url: "$${__value.raw}"
+              datasourceUid: Tempo
 
       - name: Tempo
         type: tempo
@@ -39,6 +46,43 @@ data:
         uid: Tempo
         editable: true
         jsonData:
+          # Link automático: trace → logs correspondentes no Loki
           tracesToLogsV2:
             datasourceUid: Loki
             filterByTraceID: true
+          serviceMap:
+            datasourceUid: VictoriaMetrics
+
+---
+# 2. Dashboard provider — diz ao Grafana onde buscar os JSONs
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wizard-dashboard-provider-monitoring
+  namespace: monitoring
+data:
+  provider.yaml: |-
+    apiVersion: 1
+    providers:
+      - name: wizard-intelligence-network
+        orgId: 1
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 30
+        allowUiUpdates: true
+        options:
+          path: /var/lib/grafana/dashboards
+          foldersFromFilesStructure: false
+
+---
+# 4. Alertas — provisioning via arquivo (substitui sidecar grafana_alert)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wizard-alert-provisioning-monitoring
+  namespace: monitoring
+data:
+  alerting.yaml: |-
+    apiVersion: 1
+    contactPoints: []
+    policies: []

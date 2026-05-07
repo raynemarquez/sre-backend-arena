@@ -112,33 +112,69 @@ async def test_health_check():
         response = await client.get("/health")
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "ok"
-    assert "circuit_breaker" in body
-    assert "cache_ready" in body
+    assert body["status"] == "alive"
+    assert "timestamp" in body
+
+# ---------------------------------------------------------------------------
+# /ready
+# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_health_check_degraded_when_circuit_open():
-    """Quando o circuit breaker está aberto, /health reporta status degraded."""
-    with patch("src.main.circuit_breaker") as mock_cb:
-        mock_cb.current_state = "open"
-        async with _make_client() as client:
-            response = await client.get("/health")
-    assert response.status_code == 200
-    assert response.json()["status"] == "degraded"
-
-@pytest.mark.asyncio
-async def test_health_cache_ready_reflects_index():
-    """cache_ready deve ser True quando _index estiver populado."""
+async def test_ready_success():
     with patch("src.main.hp_api_client") as mock_client:
-        mock_client._index = {"harry potter": {}}
-        
-        # Simula circuit breaker fechado
+        mock_client._index = {"harry": {}}
+
         with patch("src.main.circuit_breaker") as mock_cb:
             mock_cb.current_state = "closed"
+
             async with _make_client() as client:
-                response = await client.get("/health")
+                response = await client.get("/ready")
+
     assert response.status_code == 200
-    assert response.json()["cache_ready"] is True
+
+    body = response.json()
+
+    assert body["status"] == "ready"
+    assert body["cache_ready"] is True
+    assert body["circuit_breaker"] == "closed"
+
+
+@pytest.mark.asyncio
+async def test_ready_fails_when_cache_not_ready():
+    with patch("src.main.hp_api_client") as mock_client:
+        mock_client._index = {}
+
+        with patch("src.main.circuit_breaker") as mock_cb:
+            mock_cb.current_state = "closed"
+
+            async with _make_client() as client:
+                response = await client.get("/ready")
+
+    assert response.status_code == 503
+
+    body = response.json()
+
+    assert body["detail"]["status"] == "not_ready"
+    assert body["detail"]["cache_ready"] is False
+
+
+@pytest.mark.asyncio
+async def test_ready_fails_when_circuit_breaker_open():
+    with patch("src.main.hp_api_client") as mock_client:
+        mock_client._index = {"harry": {}}
+
+        with patch("src.main.circuit_breaker") as mock_cb:
+            mock_cb.current_state = "open"
+
+            async with _make_client() as client:
+                response = await client.get("/ready")
+
+    assert response.status_code == 503
+
+    body = response.json()
+
+    assert body["detail"]["status"] == "not_ready"
+    assert body["detail"]["circuit_breaker"] == "open"
 
 # ---------------------------------------------------------------------------
 # /metrics

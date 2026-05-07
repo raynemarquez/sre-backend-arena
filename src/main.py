@@ -4,7 +4,8 @@ import contextvars
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import FastAPI, HTTPException, status, Response, Request
+from fastapi import FastAPI, HTTPException, status, Request
+from fastapi import Response as FastApiResponse
 from src.models.wizard import WizardResponse
 from src.services.hp_api import HPApiClient, circuit_breaker
 from src.observability.tracing import setup_tracing
@@ -52,16 +53,15 @@ def _inject_trace_context(logger, method, event_dict):
 # ---------------------------------------------------------------------------
 structlog.configure(
     processors=[
-        structlog.stdlib.add_logger_name,
-        structlog.stdlib.add_log_level,
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
         _inject_trace_context,
         structlog.processors.JSONRenderer(),
     ],
-    wrapper_class=structlog.stdlib.BoundLogger,
-    logger_factory=structlog.stdlib.LoggerFactory(),
+    wrapper_class=structlog.make_filtering_bound_logger(10),
     cache_logger_on_first_use=True,
 )
 
@@ -150,19 +150,22 @@ async def observability_middleware(request: Request, call_next):
     # Propaga X-Request-ID do caller ou gera um novo
     request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
     request_id_context.set(request_id)
+    structlog.contextvars.bind_contextvars(request_id=request_id)
 
     start = time.perf_counter()
     response = await call_next(request)
     duration = time.perf_counter() - start
 
     # Registrar Métricas
+
     path = request.url.path
-    REQUEST_COUNT.labels(
-        method=request.method,
-        endpoint=path,
-        http_status=response.status_code,
-    ).inc()
-    REQUEST_LATENCY.labels(method=request.method, endpoint=path).observe(duration)
+    if path not in ["/health", "/ready", "/metrics"]:
+        REQUEST_COUNT.labels(
+            method=request.method,
+            endpoint=path,
+            http_status=response.status_code,
+        ).inc()
+        REQUEST_LATENCY.labels(method=request.method, endpoint=path).observe(duration)
 
     # Atualiza o gauge do circuit breaker a cada request (custo zero)
     CIRCUIT_BREAKER_STATE.set(1 if circuit_breaker.current_state == "open" else 0)
@@ -178,18 +181,36 @@ async def observability_middleware(request: Request, call_next):
 
 @app.get("/health", status_code=status.HTTP_200_OK, tags=["infra"])
 async def health():
-    """Liveness/Readiness probe — inclui estado do circuit breaker."""
-    return {
-        "status": "ok" if circuit_breaker.current_state != "open" else "degraded",
-        "circuit_breaker": circuit_breaker.current_state,
-        "cache_ready": bool(hp_api_client._index),
-    }
+    """Liveness probe: indica se o processo está vivo."""
+    return {"status": "alive", "timestamp": time.time()}
+
+
+@app.get("/ready", tags=["infra"])
+async def ready():
+    """
+    Readiness probe: indica se a app pode receber tráfego.
+    Falha se o cache não estiver pronto ou se o circuit breaker estiver aberto.
+    """
+    is_ready = bool(hp_api_client._index)
+    cb_state = circuit_breaker.current_state
+
+    if not is_ready or cb_state == "open":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "status": "not_ready",
+                "cache_ready": is_ready,
+                "circuit_breaker": cb_state,
+            },
+        )
+
+    return {"status": "ready", "cache_ready": is_ready, "circuit_breaker": cb_state}
 
 
 @app.get("/metrics", tags=["infra"])
 async def metrics():
     """Scrape endpoint para VictoriaMetrics."""
-    return Response(
+    return FastApiResponse(
         content=generate_latest(),
         media_type=CONTENT_TYPE_LATEST,
     )
@@ -199,7 +220,7 @@ async def metrics():
 # Endpoint de negócio
 # ---------------------------------------------------------------------------
 @app.get("/wizard/{name}", response_model=WizardResponse, tags=["wizard"])
-async def get_wizard(name: str):
+async def get_wizard(name: str, response: FastApiResponse):
     """
     Retorna inteligência sobre um bruxo.
     Cache L1 (por nome) + L2 (lista completa) garantem resposta em memória
@@ -208,6 +229,9 @@ async def get_wizard(name: str):
     try:
         # Busca os dados (hp_api_client já faz o enriquecimento de powerScore e loyalty)
         data, from_cache = await hp_api_client.get_character_data(name)
+
+        # AJUSTE AQUI: Injetar o header para o SRE ver o hit de cache
+        response.headers["X-Cache"] = "HIT" if from_cache else "MISS"
 
         # 1. Registrar métricas de Cache
         if from_cache:

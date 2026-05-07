@@ -21,4 +21,12 @@ spec:
           type: Utilization
           averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
     {{- end }}
+  behavior: # Adição para escala mais agressiva
+    scaleUp:
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 300 # 5 minutos para evitar "flapping"
 {{- end -}}

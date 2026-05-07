@@ -15,7 +15,7 @@ admin:
 resources:
   requests:
     cpu: "25m"
-    memory: "70Mi"
+    memory: "60Mi"
   limits:
     cpu: "100m"
     memory: "150Mi"   

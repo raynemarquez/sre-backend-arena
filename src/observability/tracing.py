@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 def setup_tracing(app) -> None:
     """
     Instrumenta a aplicação FastAPI com OpenTelemetry.
-    Auto-instrumenta httpx e garante propagação de contexto.
+    Exporta traces via OTLP HTTP para o endpoint configurado.
     """
     endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 
@@ -47,24 +47,22 @@ def setup_tracing(app) -> None:
         )
 
         provider = TracerProvider(resource=resource)
-        exporter = OTLPSpanExporter(
-            endpoint=f"{endpoint.rstrip('/')}/v1/traces",
-        )
+        # Garante que o endpoint termina corretamente para a lib
+        otlp_endpoint = f"{endpoint.rstrip('/')}/v1/traces"
+
+        exporter = OTLPSpanExporter(endpoint=otlp_endpoint)
         provider.add_span_processor(BatchSpanProcessor(exporter))
         trace.set_tracer_provider(provider)
 
         FastAPIInstrumentor.instrument_app(
             app,
             tracer_provider=provider,
-            excluded_urls="/health,/metrics",  # não criar spans para probes
+            excluded_urls="/health,/ready,/metrics",  # não criar spans para probes
         )
+        # Instrumenta o cliente HTTPX para rastrear chamadas à HP-API
         HTTPXClientInstrumentor().instrument(tracer_provider=provider)
 
-        logger.info(f"OpenTelemetry tracing enabled → {endpoint}")
+        logger.info(f"OpenTelemetry tracing enabled → exporting to {otlp_endpoint}")
 
-    except ImportError as e:
-        logger.warning(
-            f"OpenTelemetry packages not installed — tracing disabled: {e}. "
-            "Install: opentelemetry-sdk opentelemetry-exporter-otlp-proto-http "
-            "opentelemetry-instrumentation-fastapi opentelemetry-instrumentation-httpx"
-        )
+    except Exception as e:
+        logger.error(f"Failed to setup OpenTelemetry: {e}")

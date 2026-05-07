@@ -1,8 +1,9 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "wizard-intelligence-network.fullname" . }}-policy
-  namespace: {{ .Release.Namespace }}
+  name: {{ include "wizard-intelligence-network.fullname" . }}
+  labels:
+    {{- include "wizard-intelligence-network.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
@@ -10,16 +11,19 @@ spec:
   policyTypes:
     - Ingress
     - Egress
-
+  
   ingress:
-    # Tráfego HTTP interno ao cluster (pods + ingress controller)
+    # 1. Permitir tráfego do Ingress Controller (Traefik)
+    # No k3d/k3s o Traefik costuma rodar no namespace kube-system
     - from:
-        - podSelector: {}
-        - namespaceSelector: {}   # permite Traefik (namespace kube-system)
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
       ports:
         - protocol: TCP
           port: 8000
-    # Scrape do VictoriaMetrics (namespace monitoring)
+    
+    # 2. Permitir tráfego do namespace de monitoramento (VictoriaMetrics Scrape)
     - from:
         - namespaceSelector:
             matchLabels:
@@ -29,14 +33,19 @@ spec:
           port: 8000
 
   egress:
-    # DNS do cluster
-    - ports:
+    # 1. Permitir DNS (UDP/TCP 53) para CoreDNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
           port: 53
 
-    # HTTPS para HP-API externa (hp-api.onrender.com)
+    # 2. Permitir tráfego para a HP-API externa (HTTPS 443)
+    # Bloqueia todo o tráfego interno (RFC1918) exceto o explicitamente permitido abaixo
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
@@ -47,10 +56,10 @@ spec:
       ports:
         - protocol: TCP
           port: 443
-        - protocol: TCP
-          port: 80
+                       
+                  
 
-    # OTLP HTTP → Tempo (traces) — namespace monitoring
+    # 3. Permitir tráfego para o Tempo (OTLP HTTP 4318) no namespace monitoring
     - to:
         - namespaceSelector:
             matchLabels:
@@ -59,4 +68,4 @@ spec:
         - protocol: TCP
           port: 4318   # OTLP HTTP
         - protocol: TCP
-          port: 4317   # OTLP gRPC (fallback)
+          port: 4317   # OTLP gRPC (fallback)                

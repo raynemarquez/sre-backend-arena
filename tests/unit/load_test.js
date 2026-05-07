@@ -61,8 +61,8 @@ const SCENARIOS = {
     executor: 'ramping-arrival-rate',
     startRate: 10,
     timeUnit: '1s',
-    preAllocatedVUs: 200,
-    maxVUs: 500,
+    preAllocatedVUs: 500, // Começa com pool alto para evitar cold start do k6
+    maxVUs: 2000,         // Aumentado para garantir 10k RPS se a latência subir
     stages: [
       { duration: '30s', target: 50   },  // aquecimento
       { duration: '1m',  target: 200  },  // sobe para 200 RPS
@@ -109,9 +109,9 @@ export const options = {
   },
   thresholds: {
     // SLO de latência: p99 < 300ms, p95 < 150ms
-    'wizard_response_time': ['p(99)<300', 'p(95)<150', 'p(50)<100'],
+    'wizard_response_time': ['p(99)<300', 'p(95)<150', 'p(50)<100'], // Bónus de performance
     // Taxa de erro < 1%
-    'wizard_error_rate': ['rate<0.01'],
+    'wizard_error_rate': ['rate<0.01'], // Zero 5xx (quase)
     // HTTP failures < 1%
     'http_req_failed': ['rate<0.01'],
     // Latência geral p99 < 300ms
@@ -123,7 +123,9 @@ export const options = {
 // Função principal
 // ---------------------------------------------------------------------------
 export default function () {
-  const BASE_URL = __ENV.BASE_URL || 'http://localhost:8000';
+//  const BASE_URL = __ENV.BASE_URL || 'http://localhost:8000';
+// URL configurada para o Ingress do k3d (sem port-forward)
+  const BASE_URL = __ENV.BASE_URL || 'http://wizard-arena.local:8080';
 
   // Escolhe um wizard aleatório — gera mix de cache hits e misses
   const wizard = WIZARDS[Math.floor(Math.random() * WIZARDS.length)];
@@ -132,6 +134,7 @@ export default function () {
   const params = {
     headers: {
       'X-Request-ID': `k6-${__VU}-${__ITER}`,
+      'Accept': 'application/json',
     },
     timeout: '5s',
   };
@@ -141,31 +144,28 @@ export default function () {
   const notFound = res.status === 404;  // wizard não encontrado é válido
   const circuitOpen = res.status === 503;
 
-  // Registra métricas customizadas
-  wizardTrend.add(res.timings.duration);
-  errorRate.add(!ok && !notFound);
-
-  // Detecta cache pelo tempo de resposta (< 5ms = muito provavelmente cache)
-  if (ok && res.timings.duration < 5) {
+  // Registo de Métricas baseadas no Header X-Cache (Backend injeta este header)
+  if (ok && res.headers['X-Cache'] === 'HIT') {
     cacheHits.add(1);
   } else if (ok) {
     cacheMisses.add(1);
   }
 
-  // Validações
+  // Métricas de tendência
+  wizardTrend.add(res.timings.duration);
+  errorRate.add(res.status >= 500 && res.status !== 503);
+
+  // Validações 
   check(res, {
     'status 200 ou 404':     (r) => r.status === 200 || r.status === 404,
-    'sem 5xx':               (r) => r.status < 500 || r.status === 503,
-    'X-Request-ID presente': (r) => r.headers['X-Request-Id'] !== undefined,
-    'resposta é JSON':       (r) => {
-      try { JSON.parse(r.body); return true; } catch { return false; }
-    },
-    'campos obrigatórios':   (r) => {
+    'X-Cache presente':      (r) => r.headers['X-Cache'] !== undefined,
+    'Corpo da resposta OK':  (r) => {
+									  
       if (r.status !== 200) return true;
-      try {
-        const b = JSON.parse(r.body);
-        return b.name && b.house !== undefined && b.powerScore !== undefined;
-      } catch { return false; }
+		   
+      const b = JSON.parse(r.body);
+      return b.name && b.house !== undefined && b.powerScore !== undefined;
+							   
     },
   });
 

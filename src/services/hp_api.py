@@ -1,9 +1,8 @@
 import asyncio
 import time
-from typing import Any
-
 import httpx
 import structlog
+from typing import Any
 from pybreaker import CircuitBreaker, CircuitBreakerError, CircuitBreakerListener
 from tenacity import (
     retry,
@@ -38,7 +37,7 @@ circuit_breaker = CircuitBreaker(
 
 # ---------------------------------------------------------------------------
 # Configuração do Cache: Resiliência de dados e performance
-# Cache async-safe
+# Cache async-safe com TTL
 # ---------------------------------------------------------------------------
 _CACHE_TTL = 300  # 5 minutos
 _ALL_CHARACTERS_KEY = "__all_characters__"
@@ -84,7 +83,6 @@ class _AsyncTTLCache:
             self._store.pop(key, None)
 
 
-# _cache = _AsyncTTLCache(maxsize=1000, ttl=_CACHE_TTL)
 _cache = _AsyncTTLCache(maxsize=200, ttl=_CACHE_TTL)
 
 
@@ -134,6 +132,43 @@ class _TokenBucketRateLimiter:
 
 _rate_limiter = _TokenBucketRateLimiter(rate=10.0, capacity=20.0)
 
+# ---------------------------------------------------------------------------
+# Contadores internos do circuit breaker (sem tocar em API privada)
+# Usamos um wrapper simples: o CB registra falhas via call() síncrono.
+# ---------------------------------------------------------------------------
+_cb_fail_count = 0
+_cb_fail_lock = asyncio.Lock()
+
+
+async def _cb_record_failure() -> None:
+    """
+    Registra uma falha no circuit breaker de forma segura para asyncio.
+
+    pybreaker é síncrono e thread-safe mas não async-safe.
+    Chamamos circuit_breaker.call() com uma função que lança exceção —
+    isso aciona o mecanismo interno de contagem sem tocar em atributos privados.
+    """
+
+    def _fail():
+        raise RuntimeError("recorded failure")
+
+    try:
+        circuit_breaker.call(_fail)
+    except (RuntimeError, CircuitBreakerError):
+        pass  # esperado
+
+
+async def _cb_record_success() -> None:
+    """Registra sucesso para resetar o contador de falhas."""
+
+    def _ok():
+        return True
+
+    try:
+        circuit_breaker.call(_ok)
+    except CircuitBreakerError:
+        pass  # CB aberto — ok, não há sucesso para registrar
+
 
 # ---------------------------------------------------------------------------
 # Cliente HP-API
@@ -157,7 +192,7 @@ class HPApiClient:
         await self._client.aclose()
 
     # ------------------------------------------------------------------
-    # Busca externa (com retry e circuit breaker)
+    # Busca externa (retry + circuit breaker)
     # ------------------------------------------------------------------
     @retry(
         stop=stop_after_attempt(3),  # Retry up to 3 times
@@ -194,46 +229,69 @@ class HPApiClient:
             raise
 
     async def _fetch_with_circuit_breaker(self) -> list[dict[str, Any]]:
-        """Envolve _fetch_all_characters com o circuit breaker sem usar call_async do pybreaker."""
+        """
+        Envolve _fetch_all_characters com o circuit breaker.
+
+        Usa apenas a API pública do pybreaker:
+          - circuit_breaker.current_state para verificar se está aberto
+          - circuit_breaker.call() para registrar sucesso/falha
+
+        Não depende de _state_storage, _inc_counter ou outros atributos
+        privados — garantindo compatibilidade com versões futuras.
+        """
         if circuit_breaker.current_state == "open":
             raise CircuitBreakerError("Circuit breaker is open")
 
         try:
             result = await self._fetch_all_characters()
-            circuit_breaker._state_storage.reset_counter()
+            await _cb_record_success()
             return result
-        except Exception as exc:
-            if circuit_breaker.is_system_error(exc):
-                circuit_breaker._inc_counter()
-                if circuit_breaker._state_storage.counter >= circuit_breaker.fail_max:
-                    circuit_breaker.open()
+        except CircuitBreakerError:
+            raise
+        except Exception:
+            await _cb_record_failure()
             raise
 
     # ------------------------------------------------------------------
-    # WARMUP de cache na inicialização
+    # Warmup de cache na inicialização
     # ------------------------------------------------------------------
-    async def warmup_cache(self):
+    async def warmup_cache(self) -> None:
         logger.info("cache_warmup_start")
 
-        data = await self._fetch_with_circuit_breaker()
+        try:
+            # O problema está aqui: se a API falhar, o código abaixo não executa
+            data = await self._fetch_with_circuit_breaker()
 
-        await _cache.set(_ALL_CHARACTERS_KEY, data)
+            await _cache.set(_ALL_CHARACTERS_KEY, data)
 
-        self._index = {}
+            self._index = {}
 
-        for c in data:
-            name = c.get("name", "").lower()
-            if not name:
-                continue
+            for c in data:
+                name = c.get("name", "").lower()
+                if not name:
+                    continue
 
-            enriched = dict(c)
-            enriched["powerScore"] = self._calculate_power_score(enriched)
-            enriched["loyalty"] = self._determine_loyalty(enriched)
+                enriched = dict(c)
+                enriched["powerScore"] = self._calculate_power_score(enriched)
+                enriched["loyalty"] = self._determine_loyalty(enriched)
 
-            self._index[name] = c
-            await _cache.set(name, enriched)
+                self._index[name] = c
+                await _cache.set(name, enriched)
 
-        logger.info("cache_warmup_done", size=len(self._index))
+            logger.info("cache_warmup_done", size=len(self._index))
+
+        except Exception as e:
+            # Se der erro, logamos e deixamos o Python seguir adiante
+            # O @property is_cache_ready retornará False, o que é o comportamento correto
+            logger.error("cache_warmup_failed", error=str(e))
+            logger.info("resuming_startup_without_cache")
+
+    @property
+    def is_cache_ready(self) -> bool:
+        # Se o try/except acima capturou um erro, o self._index estará vazio
+        # e o seu Readiness Probe saberá que ainda não pode receber tráfego,
+        # mas o pod FICARÁ VIVO (Running).
+        return bool(getattr(self, "_index", {}))
 
     # ------------------------------------------------------------------
     # Interface pública
@@ -243,18 +301,18 @@ class HPApiClient:
         Retorna (character_dict, from_cache).
 
         Estratégia de cache em dois níveis:
-        1. Nível 1: Cache por nome de personagem (hit mais comum)
-        2. Nível 2: Cache da lista completa (evita múltiplas chamadas à API)
+        1. L1: Cache por nome de personagem (hit mais comum)
+        2. L2: Cache da lista completa (evita múltiplas chamadas à API)
 
-        Isso garante que apenas 1 chamada HTTP acontece por TTL (10min),
-        independente de quantos nomes diferentes chegam.
+        Apenas 1 chamada HTTP acontece por TTL (~5 min), independente do
+        número de nomes diferentes recebidos.
         """
         cache_key = name.lower().strip()
 
         # Nível 1: personagem já cacheado individualmente
         cached_value, is_valid, is_stale = await _cache.get(cache_key)
         if is_valid:
-            logger.info("cache_hit_valid", wizard=name)
+            logger.debug("cache_hit_valid", wizard=name)
             return cached_value, True
 
         logger.info("cache_miss", wizard=name)

@@ -17,11 +17,11 @@ server:
 
   resources:
     requests:
-      cpu: "50m"
+      cpu: "30m"
       memory: "60Mi"    # Request baixo — scheduler não reserva mais que isso
     limits:
-      cpu: "200m"
-      memory: "150Mi"   # Hard limit: se passar disso, OOMKill (preferível a travar o node)
+      cpu: "150m"
+      memory: "100Mi"   # Hard limit: se passar disso, OOMKill (preferível a travar o node)
 
   extraArgs:
     envflag.enable: "true"
@@ -30,8 +30,7 @@ server:
     # CRÍTICO: limita o cache TSDB a 30% do limit de memória (~45Mi)
     # Sem isso, o VM aloca o máximo possível e bate em 200Mi+
     memory.allowedPercent: "30"
-    # Reduz overhead de compactação em background (libera ~10-20Mi)
-    #smallScrapeTargetSize: "true"
+    inmemoryDataFlushInterval: "10s"
 
   scrape:
     enabled: true
