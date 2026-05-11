@@ -67,11 +67,11 @@ extraVolumeMounts:
 
 resources:
   requests:
-    cpu: "20m"
-    memory: "40Mi"
-  limits:
     cpu: "50m"
     memory: "80Mi"
+  limits:
+    cpu: "100m"
+    memory: "180Mi"
 
 readinessProbe:
   initialDelaySeconds: 10
