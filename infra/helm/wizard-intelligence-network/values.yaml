@@ -1,4 +1,4 @@
-# values.yaml — wizard-intelligence-network
+  # values.yaml — wizard-intelligence-network
 # Ambiente local (k3d) — budget: 1.5 CPU / 350MB RAM total
 #
 # Deploy:
@@ -16,21 +16,20 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: "wizard-intelligence-network"
 
-app:
-  env:
-    - name: APP_ENV
-      value: "production"
-    - name: APP_VERSION
-      value: "1.0.0"
-    - name: HP_API_BASE_URL
-      value: "https://hp-api.onrender.com/api"
-    - name: HP_API_RATE_LIMIT_RPS
-      value: "10"
-    - name: HP_API_RATE_LIMIT_BURST
-      value: "20"
-    - name: LOG_LEVEL
-      value: "info"
+# Configuração da aplicação — escalares simples para uso direto no deployment.yaml
+# (listas de objetos {name, value} não podem ser usadas como string via | default)
 
+app:
+                  
+  appEnv: "production"
+  appVersion: "1.0.0"
+  hpApiBaseUrl: "https://hp-api.onrender.com/api"
+  hpApiRateLimitRps: "10"
+  hpApiRateLimitBurst: "20"
+  logLevel: "info"
+
+# OpenTelemetry — desabilitado por padrão para manter o budget local
+# Para ativar: otel.enabled: true + otel.endpoint: "http://tempo.monitoring.svc:4318"
 otel:
   enabled: false
   endpoint: ""
@@ -67,14 +66,16 @@ service:
   port: 8000
   targetPort: 8000
 
-# Ingress (Traefik k3d) — Porta de entrada para os 10k RPS
+# Ingress via Traefik k3d — expõe na porta 8080 do host porta de entrada para os 10k RPS
 ingress:
   enabled: true
   className: "traefik"
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: web
     # Otimizações Traefik para alto tráfego
-    traefik.ingress.kubernetes.io/router.middlewares: "wizard-ratelimit@kubernetescrd"
+    # Formato obrigatório: {namespace}-{middlewareName}@kubernetescrd
+    # Middleware "wizard-ratelimit" está no namespace "wizard" → "wizard-wizard-ratelimit"
+    traefik.ingress.kubernetes.io/router.middlewares: "wizard-wizard-ratelimit@kubernetescrd"
   hosts:
     - host: wizard-arena.local
       paths:
@@ -85,11 +86,11 @@ ingress:
 
 resources:
   requests:
-    cpu: "100m"
-    memory: "60Mi"
+    cpu: "200m"
+    memory: "256Mi"
   limits:
-    cpu: "500m" # Permitir picos de CPU para processar os 10k RPS
-    memory: "110Mi"
+    cpu: "800m" # Permitir picos de CPU para processar os 10k RPS
+    memory: "512Mi"
 
 
 autoscaling:
@@ -98,12 +99,20 @@ autoscaling:
   maxReplicas: 2
   # Escala rapidamente quando a CPU bater 60% para não enfileirar requisições
   targetCPUUtilizationPercentage: 70
+  behavior:
+  scaleUp:
+    policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+  scaleDown:
+    stabilizationWindowSeconds: 300
 
 nodeSelector: {}
 tolerations: []
 affinity: {}
 
-# Observabilidade — provisioning estático (sem sidecars)
+# Observabilidade como código — provisionamento via ConfigMaps no Grafana
 grafanaDatasource:
   enabled: true
 

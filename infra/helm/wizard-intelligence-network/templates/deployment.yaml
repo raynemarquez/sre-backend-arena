@@ -1,3 +1,10 @@
+# values.yaml — wizard-intelligence-network
+# Ambiente local (k3d) — budget: 1.5 CPU / 350MB RAM total
+#
+# Deploy:
+#   helm upgrade --install wizard infra/helm/wizard-intelligence-network -n wizard --create-namespace -f infra/helm/wizard-intelligence-network/values.yaml
+# ---------------------------------------------------------------------------
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -28,8 +35,8 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
 
-      # tmpfs obrigatório com readOnlyRootFilesystem: true
-      # Python e uvicorn precisam de /tmp para arquivos temporários
+      # /tmp como emptyDir é obrigatório com readOnlyRootFilesystem: true
+      # Python e uvicorn usam /tmp para arquivos temporários de processo
       volumes:
         - name: tmp
           emptyDir: {}
@@ -55,20 +62,32 @@ spec:
             - name: PYTHONDONTWRITEBYTECODE
               value: "1"
             - name: APP_ENV
-              value: {{ .Values.app.env | default "production" | quote }}
+              value: {{ .Values.app.appEnv | default "production" | quote }}
             - name: APP_VERSION
-              value: {{ .Chart.AppVersion | quote }}
-# OTEL Configuration
-#{{- if .Values.otel }}
-#    {{- if .Values.otel.enabled }}
-#        - name: OTEL_SERVICE_NAME
-#          value: {{ include "wizard-intelligence-network.fullname" . | quote }}
-#        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-#          value: {{ .Values.otel.endpoint | default "http://tempo.monitoring.svc:4318" | quote }}
-#  {{- end }}
-#{{- end }}
+              value: {{ .Values.app.appVersion | default .Chart.AppVersion | quote }}
+            - name: HP_API_BASE_URL
+              value: {{ .Values.app.hpApiBaseUrl | default "https://hp-api.onrender.com/api" | quote }}
+            - name: HP_API_RATE_LIMIT_RPS
+              value: {{ .Values.app.hpApiRateLimitRps | default "10" | quote }}
+            - name: HP_API_RATE_LIMIT_BURST
+              value: {{ .Values.app.hpApiRateLimitBurst | default "20" | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.app.logLevel | default "info" | quote }}
+            # OpenTelemetry — ativado apenas quando otel.enabled: true
+            # Se OTEL_EXPORTER_OTLP_ENDPOINT estiver vazio, o SDK opera em modo no-op
+            {{- if .Values.otel.enabled }}
+            - name: ENABLE_TRACING
+              value: "true"
+            - name: OTEL_SERVICE_NAME
+              value: {{ include "wizard-intelligence-network.fullname" . | quote }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.otel.endpoint | default "http://tempo.monitoring.svc:4318" | quote }}
+            {{- end }}
 
-          # Startup Probe: Aguarda o warmup do cache (pode demorar na primeira vez)
+          # StartupProbe aponta para /ready (não /health) porque:
+          # /ready verifica cache_ready=true — o pod não deve receber tráfego
+          # antes do warmup terminar. Com failureThreshold=60 e period=10s,
+          # o K8s aguarda até 10 minutos antes de reiniciar.
           startupProbe:
             httpGet:
               path: /ready
@@ -76,8 +95,10 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
             failureThreshold: 60
+            timeoutSeconds: 5
 
-          # Liveness Probe: Verifica se o processo Python/Uvicorn está respondendo
+          # LivenessProbe usa /health (leve, sem verificação de dependências)
+          # Reinicia o pod apenas se o processo Python travar completamente
           livenessProbe:
             httpGet:
               path: /health
@@ -87,12 +108,13 @@ spec:
             failureThreshold: 3
             timeoutSeconds: 5
 
-          # Readiness Probe: Verifica se a app pode receber tráfego (Cache OK + CB Closed)
+          # ReadinessProbe usa /ready (cache + circuit breaker)
+          # K8s retira o pod do Service quando retorna 503, sem reiniciá-lo
           readinessProbe:
             httpGet:
               path: /ready
               port: http
-            initialDelaySeconds: 5  
+            initialDelaySeconds: 5
             periodSeconds: 10
             failureThreshold: 5
             timeoutSeconds: 5

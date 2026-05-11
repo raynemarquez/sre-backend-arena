@@ -44,6 +44,6 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
 CMD ["/app/venv/bin/uvicorn", "src.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
-     "--workers", "1", \
+     "--workers", "2", \
      "--loop", "uvloop", \
      "--http", "httptools"]
