@@ -74,27 +74,14 @@ cluster-delete: ## Destroi o cluster k3d local
 # ─────────────────────────────────────────────
 # Observabilidade (instala via Helm)
 # ─────────────────────────────────────────────
-.PHONY: obs-install
-obs-install: ## Instala VictoriaMetrics + Grafana + Tempo + Loki + Promtail
-# Crie o secret do Grafana antes de rodar este comando:
-#   kubectl create secret generic grafana-admin-secret \
-#     --from-literal=admin-user=admin \
-#     --from-literal=admin-password=SUA_SENHA \
-#     -n monitoring --dry-run=client -o yaml | kubectl apply -f -
+.PHONY: obs-install_part1
+obs-install_part1: ## Instala VictoriaMetrics + Tempo + Loki + Promtail
 	helm repo add vm https://victoriametrics.github.io/helm-charts/ --force-update
-	helm repo add grafana https://grafana.github.io/helm-charts --force-update
 	helm repo update
 
 	helm upgrade --install victoria-metrics-single vm/victoria-metrics-single \
 		-n $(MONITORING_NS) --create-namespace \
 		-f infra/observability/values-vm-single.yaml \
-		--wait --timeout 3m
-
-	kubectl apply -f infra/observability/grafana-configmaps-monitoring.yaml
-
-	helm upgrade --install grafana grafana/grafana \
-		-n $(MONITORING_NS) \
-		-f infra/observability/values-grafana.yaml \
 		--wait --timeout 3m
 
 #
@@ -114,6 +101,24 @@ obs-install: ## Instala VictoriaMetrics + Grafana + Tempo + Loki + Promtail
 		-n $(MONITORING_NS) \
 		-f infra/observability/values-promtail.yaml \
 		--wait --timeout 3m
+
+.PHONY: obs-install_part2
+obs-install_part2: ## Instala Grafana - precisa ter instalado a aplicação wizard-intelligence-network antes pois tem dependência no helm chart para criar datasource de métricas
+# Crie o secret do Grafana antes de rodar este comando:
+#   kubectl create secret generic grafana-admin-secret \
+#     --from-literal=admin-user=admin \
+#     --from-literal=admin-password=SUA_SENHA \
+#     -n monitoring --dry-run=client -o yaml | kubectl apply -f -
+	
+	helm repo add grafana https://grafana.github.io/helm-charts --force-update
+	helm repo update
+
+	helm upgrade --install grafana grafana/grafana \
+		-n $(MONITORING_NS) \
+		-f infra/observability/values-grafana.yaml \
+		--wait --timeout 3m
+
+	kubectl apply -f infra/observability/grafana-configmaps-monitoring.yaml
 
 # ─────────────────────────────────────────────
 # Deploy da aplicação
@@ -172,7 +177,7 @@ budget-check: ## Verifica consumo de CPU/RAM vs budget (1.5 CPU / 350MB)
 	kubectl top pods -n $(MONITORING_NS)
 
 .PHONY: all
-all: cluster-create obs-install deploy ## Setup completo: cluster + obs + app
+all: cluster-create obs-install_part1 deploy obs-install_part2 ## Setup completo: cluster + obs + app
 	@echo ""
 	@echo "Stack completa rodando!"
 	@echo "   App:     make app-port     -> http://localhost:8000"
