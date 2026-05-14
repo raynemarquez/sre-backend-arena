@@ -20,6 +20,18 @@ resources:
     cpu: "100m"
     memory: "200Mi"   
 
+# Ingress via Traefik — acesso em http://grafana.local:8080
+# Não usar porta 3000 no host — essa é a porta interna do pod.
+# O Traefik escuta na porta 8080 do host (mapeada pelo k3d) e faz proxy para :3000.
+ingress:
+  enabled: true
+  ingressClassName: traefik
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+  hosts:
+    - grafana.local
+  path: /
+
 # Sidecars desabilitados para economizar memória (usaremos provisionamento via ConfigMap mount)
 sidecar:
   dashboards:
@@ -30,6 +42,11 @@ sidecar:
     enabled: false
 
 grafana.ini:
+  server:
+    # Necessário para o Grafana gerar links corretos via Ingress
+    root_url: "http://grafana.local:8080"
+    serve_from_sub_path: false
+    
   unified_alerting:
     enabled: true
     min_interval: 10s

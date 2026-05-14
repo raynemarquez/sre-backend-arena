@@ -2,10 +2,12 @@
 # SEGREDOS E CONFIGURAÇÕES LOCAIS — NUNCA DEVEM ENTRAR NO REPOSITÓRIO
 # =============================================================================
 
-# Arquivos de variáveis de ambiente — o mais crítico
+# Arquivos de variáveis de ambiente 
+.env
 *.env
 .env.*
-!.env.example        # exceção: o template sem valores reais PODE ser commitado
+!.env.example  
+# exceção: template sem valores reais PODE ser commitado
 
 # Secrets do Kubernetes gerados localmente
 k8s/secret.yaml
@@ -14,6 +16,7 @@ secrets/
 **/secret.yaml
 **/*.pem
 **/*.key
+**/*.crt
 **/*.p12
 **/*.pfx
 *senha*.txt
@@ -31,8 +34,14 @@ gcloud/
 */terraform/terraform.tfstate
 */terraform/terraform.tfstate.backup
 */terraform/.terraform.lock.hcl
-*/terraform/*.tfvars          # valores de variáveis (podem conter segredos)
-!terraform/*.tfvars.example # template sem valores reais pode ser commitado
+*/terraform/*.tfvars          
+# valores de variáveis (podem conter segredos)
+!terraform/*.tfvars.example 
+# template sem valores reais pode ser commitado
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
 
 # =============================================================================
 # PYTHON
@@ -66,6 +75,7 @@ build/
 .coverage.*
 coverage.xml
 htmlcov/
+.tox/
 junit*.xml
 
 # Mypy
@@ -76,11 +86,20 @@ junit*.xml
 .ruff_cache/
 
 # =============================================================================
+# NODE / K6
+# =============================================================================
+node_modules/
+npm-debug.log*
+.npm
+
+# =============================================================================
 # DOCKER
 # =============================================================================
 
 # Nunca commitar imagens exportadas
 *.tar
+.docker/
+docker-compose.override.yml
 
 # =============================================================================
 # SISTEMA OPERACIONAL
@@ -115,6 +134,14 @@ Desktop.ini
 # Vim
 *.swp
 *.swo
+
+# =============================================================================
+# HELM / KUBERNETES
+# =============================================================================
+
+*.tgz
+charts/
+rendered.yaml
 
 # =============================================================================
 # LOGS E DADOS TEMPORÁRIOS

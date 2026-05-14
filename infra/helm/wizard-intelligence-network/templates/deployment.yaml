@@ -1,10 +1,3 @@
-# values.yaml — wizard-intelligence-network
-# Ambiente local (k3d) — budget: 1.5 CPU / 350MB RAM total
-#
-# Deploy:
-#   helm upgrade --install wizard infra/helm/wizard-intelligence-network -n wizard --create-namespace -f infra/helm/wizard-intelligence-network/values.yaml
-# ---------------------------------------------------------------------------
-
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -73,8 +66,9 @@ spec:
               value: {{ .Values.app.hpApiRateLimitBurst | default "20" | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.app.logLevel | default "info" | quote }}
-            # OpenTelemetry — ativado apenas quando otel.enabled: true
-            # Se OTEL_EXPORTER_OTLP_ENDPOINT estiver vazio, o SDK opera em modo no-op
+            # OpenTelemetry — ativado apenas quando otel.enabled: true no values.yaml
+            # Se ENABLE_TRACING não estiver definido, setup_tracing() não é chamado
+            # e o SDK opera em modo no-op (zero overhead, zero dependências externas)
             {{- if .Values.otel.enabled }}
             - name: ENABLE_TRACING
               value: "true"

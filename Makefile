@@ -105,11 +105,7 @@ obs-install_part1: ## Instala VictoriaMetrics + Tempo + Loki + Promtail
 .PHONY: obs-install_part2
 obs-install_part2: ## Instala Grafana - precisa ter instalado a aplicação wizard-intelligence-network antes pois tem dependência no helm chart para criar datasource de métricas
 # Crie o secret do Grafana antes de rodar este comando:
-#   kubectl create secret generic grafana-admin-secret \
-#     --from-literal=admin-user=admin \
-#     --from-literal=admin-password=SUA_SENHA \
-#     -n monitoring --dry-run=client -o yaml | kubectl apply -f -
-	
+#	kubectl create secret generic grafana-admin-secret --from-literal=admin-user=admin --from-literal=admin-password=SUA-SENHA -n monitoring
 	helm repo add grafana https://grafana.github.io/helm-charts --force-update
 	helm repo update
 

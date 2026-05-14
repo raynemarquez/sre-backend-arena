@@ -37,13 +37,21 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
   CMD /app/venv/bin/python -c \
     "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 
-# uvloop está no requirements e funciona no Linux (container).
-# 1 worker + uvloop bate mais RPS que 2 workers + asyncio puro
-# porque evita contention entre processos no GIL e aproveita o event loop.
-# Para escalar horizontalmente, o HPA cuida de adicionar pods.
+# IMPORTANTE: --workers 1 
+#
+# O cache in-memory (_AsyncTTLCache e _index no HPApiClient) é LOCAL ao processo.
+# Com 2 workers (2 processos separados), cada processo teria seu próprio cache —
+# duplicando o uso de memória e dobrando as chamadas ao warmup da HP-API.
+# Pior: se um worker faz warmup e outro não, os dois recebem tráfego de forma
+# imprevisível, resultando em cache misses desnecessários.
+#
+# Com 1 worker + uvloop, o event loop lida com milhares de conexões concorrentes
+# de forma cooperativa — sem GIL, sem contention entre processos.
+# A escala horizontal é feita pelo HPA adicionando pods (cada pod = 1 cache isolado
+# e completo), não dentro do pod com múltiplos workers.
 CMD ["/app/venv/bin/uvicorn", "src.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
-     "--workers", "2", \
+     "--workers", "1", \
      "--loop", "uvloop", \
      "--http", "httptools"]

@@ -40,9 +40,22 @@ jobs:
         with:
           version: v3.12.0
       - name: Helm Lint
-        run: helm lint infra/helm/wizard-intelligence-network/
+        # -f values.yaml garante que o lint valida os values do projeto,
+        # não apenas os defaults do chart. Sem isso, erros como referências
+        # a chaves inexistentes são silenciosamente ignorados.
+        run: |
+          helm lint infra/helm/wizard-intelligence-network/ \
+            -f infra/helm/wizard-intelligence-network/values.yaml
+
       - name: Helm Template Validation
-        run: helm template wizard-intelligence-network infra/helm/wizard-intelligence-network/ > rendered.yaml
+        # --set image.pullPolicy=IfNotPresent sobrescreve "Never" que só funciona
+        # em cluster local com imagem importada — não disponível no CI.
+        run: |
+          helm template wizard-intelligence-network \
+            infra/helm/wizard-intelligence-network/ \
+            -f infra/helm/wizard-intelligence-network/values.yaml \
+            --set image.pullPolicy=IfNotPresent \
+            > /dev/null
 
   test:
     name: Tests & Coverage

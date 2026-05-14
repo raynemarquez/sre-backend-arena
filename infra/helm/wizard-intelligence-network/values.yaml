@@ -1,9 +1,10 @@
-  # values.yaml — wizard-intelligence-network
-# Ambiente local (k3d) — budget: 1.5 CPU / 350MB RAM total
+# values.yaml — wizard-intelligence-network
+# Ambiente local (k3d) — budget: 1.5 CPU / 350MB RAM total para TODA a stack
 #
 # Deploy:
-#   helm upgrade --install wizard infra/helm/wizard-intelligence-network -n wizard --create-namespace -f infra/helm/wizard-intelligence-network/values.yaml
-# ---------------------------------------------------------------------------
+#   helm upgrade --install wizard infra/helm/wizard-intelligence-network \
+#     -n wizard --create-namespace \
+#     -f infra/helm/wizard-intelligence-network/values.yaml
 
 replicaCount: 1
 
@@ -17,7 +18,6 @@ nameOverride: ""
 fullnameOverride: "wizard-intelligence-network"
 
 # Configuração da aplicação — escalares simples para uso direto no deployment.yaml
-# (listas de objetos {name, value} não podem ser usadas como string via | default)
 
 app:
                   
@@ -82,31 +82,45 @@ ingress:
         - path: /
           pathType: Prefix
 
-# Budget de Recursos (350Mi TOTAL para a stack)
+# ─── Budget de Recursos ────────────────────────────────────────────────────
+# Budget local: 1.5 CPU / 350MB RAM para TODA a stack (app + observabilidade)
+#
+# Distribuição (requests — o que o scheduler reserva):
+#   App (2 réplicas HPA max): 2 × 100m CPU  / 2 × 64Mi RAM  = 200m / 128Mi
+#   VictoriaMetrics:               30m CPU  /     60Mi RAM
+#   Grafana:                       25m CPU  /     60Mi RAM
+#   Loki:                          20m CPU  /     40Mi RAM
+#   Promtail:                      20m CPU  /     30Mi RAM
+#   ────────────────────────────────────────────────────────
+#   TOTAL requests:               295m CPU  /    318Mi RAM  ✓ dentro de 350Mi
+#
+# ATENÇÃO: requests altos (ex: 200m/256Mi por réplica) reservam recursos no node
+# e podem impedir o scheduling. A app em cache usa ~5-20m CPU e ~60-80Mi RAM.
+# Limits altos são aceitáveis (usados apenas em pico); requests devem ser reais.
 
 resources:
   requests:
-    cpu: "200m"
-    memory: "256Mi"
+    cpu: "100m"
+    memory: "64Mi"
   limits:
-    cpu: "800m" # Permitir picos de CPU para processar os 10k RPS
-    memory: "512Mi"
+    cpu: "500m" # Permitir picos de CPU para processar os 10k RPS
+    memory: "128Mi"
 
 
 autoscaling:
   enabled: true
   minReplicas: 1
-  maxReplicas: 2
-  # Escala rapidamente quando a CPU bater 60% para não enfileirar requisições
+  maxReplicas: 2  # Local: 2 réplicas = 200m CPU / 128Mi (dentro do budget)
+                                                                                
   targetCPUUtilizationPercentage: 70
   behavior:
-  scaleUp:
-    policies:
-      - type: Percent
-        value: 100
-        periodSeconds: 15
-  scaleDown:
-    stabilizationWindowSeconds: 300
+    scaleUp:
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 300  # 5 minutos para evitar flapping
 
 nodeSelector: {}
 tolerations: []
